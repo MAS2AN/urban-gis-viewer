@@ -37,72 +37,20 @@ except Exception:
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
-
-html, body, .stApp {
-    background-color: #F0F4F8 !important;
-    font-family: 'Noto Sans JP', sans-serif !important;
-    color: #1A2B3C !important;
-}
-p, span, div, label, li, td, th,
-.stMarkdown, [data-testid="stMarkdownContainer"] {
-    color: #1A2B3C !important;
-}
-section[data-testid="stSidebar"] {
-    background-color: #E4EBF2 !important;
-    border-right: 1px solid #C8D8E8 !important;
-}
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] div,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] li { color: #1A2B3C !important; }
-section[data-testid="stSidebar"] h2 {
-    color: #1A4B8C !important; font-size: 1rem !important; font-weight: 700 !important;
-}
-h1 { color: #1A2B3C !important; font-weight: 700 !important; }
-h2, h3 { color: #1A4B8C !important; font-weight: 600 !important; }
-[data-testid="stForm"] {
-    background: #FFFFFF !important;
-    border: 1px solid #C8D8E8 !important;
-    border-radius: 14px !important;
-    padding: 1.2rem 1.5rem 1rem !important;
-    box-shadow: 0 2px 10px rgba(26,75,140,0.08) !important;
-}
-.stTextInput > div > div > input {
-    background: #F8FAFC !important;
-    border: 1.5px solid #C8D8E8 !important;
-    border-radius: 8px !important;
-    color: #1A2B3C !important;
-}
-.stTextInput > div > div > input:focus {
-    border-color: #1A4B8C !important;
-    box-shadow: 0 0 0 3px rgba(26,75,140,0.15) !important;
-}
-.stFormSubmitButton > button {
-    background-color: #1A4B8C !important;
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 10px !important;
-    font-weight: 600 !important;
-    font-size: 1rem !important;
-    padding: 0.6rem 2rem !important;
-}
-.stFormSubmitButton > button:hover { background-color: #163D73 !important; }
 [data-testid="stMetric"] {
-    background: #FFFFFF !important;
-    border: 1px solid #C8D8E8 !important;
-    border-radius: 12px !important;
-    padding: 1rem 1.2rem !important;
-    box-shadow: 0 2px 8px rgba(26,75,140,0.07) !important;
+    background: #FFFFFF;
+    border: 1px solid #C8D8E8;
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    box-shadow: 0 2px 8px rgba(26,75,140,0.07);
 }
-[data-testid="stMetricLabel"] { color: #5A7A9C !important; font-size: 0.82rem !important; }
-[data-testid="stMetricValue"] { color: #1A2B3C !important; font-weight: 700 !important; }
-[data-testid="stAlert"] {
-    border-radius: 10px !important; background: #EBF2FA !important;
-    border-left-color: #1A4B8C !important;
+[data-testid="stForm"] {
+    background: #FFFFFF;
+    border: 1px solid #C8D8E8;
+    border-radius: 14px;
+    padding: 1.2rem 1.5rem 1rem;
+    box-shadow: 0 2px 10px rgba(26,75,140,0.08);
 }
-hr { border-color: #C8D8E8 !important; }
 </style>
 """, unsafe_allow_html=True)
 
