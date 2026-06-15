@@ -15,22 +15,25 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
-# Streamlit Cloud Secrets → 環境変数
-for _k in ("REINFOLIB_API_KEY",):
-    if _k not in os.environ and _k in st.secrets:
-        os.environ[_k] = st.secrets[_k]
-
 sys.path.insert(0, str(Path(__file__).parent))
 from urban_gis import ZONE_COLORS, fetch_planning_info, geocode
 
 # ────────────────────────────────────────────────
-# ページ設定
+# ページ設定（最初に呼ぶ必要あり）
 # ────────────────────────────────────────────────
 st.set_page_config(
     page_title="全国都市計画GISビューア",
     page_icon="🗺️",
     layout="wide",
 )
+
+# Streamlit Cloud Secrets → 環境変数
+try:
+    for _k in ("REINFOLIB_API_KEY",):
+        if _k not in os.environ and _k in st.secrets:
+            os.environ[_k] = st.secrets[_k]
+except Exception:
+    pass
 
 st.markdown("""
 <style>
