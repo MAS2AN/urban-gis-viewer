@@ -67,8 +67,23 @@ def _reinfolib_features(
     return resp.json().get("features", [])
 
 
+def _reinfolib_features_robust(
+    endpoint: str, lat: float, lon: float, api_key: str
+) -> list[dict]:
+    """zoom15 でフィーチャが空なら zoom14 も試みる。"""
+    for zoom in [15, 14]:
+        try:
+            feats = _reinfolib_features(endpoint, lat, lon, api_key, zoom)
+            if feats:
+                return feats
+        except Exception:
+            pass
+    return []
+
+
 def _hit(features: list[dict], lat: float, lon: float) -> dict | None:
-    """フィーチャ列から座標を含む最初のフィーチャを返す。"""
+    """完全一致を優先し、なければ 20m 以内の最近傍フィーチャを返す。
+    ポリゴン間の微小ギャップ（行政 GIS データに多い）に対応するための措置。"""
     pt = Point(lon, lat)
     for feat in features:
         try:
@@ -76,7 +91,16 @@ def _hit(features: list[dict], lat: float, lon: float) -> dict | None:
                 return feat
         except Exception:
             pass
-    return None
+    # 最近傍フォールバック（閾値 0.0002° ≈ 約 20m）
+    nearest, min_dist = None, float("inf")
+    for feat in features:
+        try:
+            d = shape(feat["geometry"]).distance(pt)
+            if d < min_dist:
+                min_dist, nearest = d, feat
+        except Exception:
+            pass
+    return nearest if (nearest is not None and min_dist < 0.0002) else None
 
 
 def geocode(address: str) -> dict:
@@ -119,7 +143,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
     }
 
     try:
-        feats = _reinfolib_features("XKT002", lat, lon, api_key)
+        feats = _reinfolib_features_robust("XKT002", lat, lon, api_key)
         result["zone_features"] = feats
         hit = _hit(feats, lat, lon)
         if hit:
@@ -131,7 +155,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
         result["errors"].append(f"XKT002: {e}")
 
     try:
-        feats = _reinfolib_features("XKT001", lat, lon, api_key)
+        feats = _reinfolib_features_robust("XKT001", lat, lon, api_key)
         hit = _hit(feats, lat, lon)
         if hit:
             result["kubun"] = hit["properties"].get("area_classification_ja")
@@ -139,7 +163,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
         result["errors"].append(f"XKT001: {e}")
 
     try:
-        feats = _reinfolib_features("XKT014", lat, lon, api_key)
+        feats = _reinfolib_features_robust("XKT014", lat, lon, api_key)
         result["fire_features"] = feats
         hit = _hit(feats, lat, lon)
         if hit:
@@ -148,7 +172,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
         result["errors"].append(f"XKT014: {e}")
 
     try:
-        feats = _reinfolib_features("XKT023", lat, lon, api_key)
+        feats = _reinfolib_features_robust("XKT023", lat, lon, api_key)
         result["chiku_features"] = feats
         hit = _hit(feats, lat, lon)
         if hit:
@@ -163,7 +187,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
         result["errors"].append(f"XKT023: {e}")
 
     try:
-        feats = _reinfolib_features("XKT024", lat, lon, api_key)
+        feats = _reinfolib_features_robust("XKT024", lat, lon, api_key)
         hit = _hit(feats, lat, lon)
         if hit:
             p = hit["properties"]
