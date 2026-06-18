@@ -3,9 +3,10 @@
 （このファイルが Streamlit Cloud の起動エントリーポイント）
 
 タブ構成:
-  Tab 1 - 🗺️ GISビューア : reinfolib 用途地域ポリゴン・防火・地区計画・道路マップ
-  Tab 2 - 📋 法規レポート : 国土数値情報 A29 + Web検索 による詳細法規チェック
+  Tab 1 - 🗺️ GISビューア    : reinfolib 用途地域ポリゴン・防火・地区計画・道路マップ
+  Tab 2 - 📋 法規レポート    : 国土数値情報 A29 + Web検索 による詳細法規チェック
   Tab 3 - 🏗️ ボリューム検討 : 建ぺい率・容積率から建物エンベロープを 3D 可視化
+  Tab 4 - 🌊 ハザードマップ  : 国交省ハザードマップポータル XYZ タイル（洪水・土砂・津波・高潮等）
 """
 
 import math
@@ -73,6 +74,54 @@ def zone_color(name: str) -> str:
 
 
 _DEFAULT_ZOOM = 15
+
+# ハザードマップポータル XYZ タイル定義
+# 出典: 国土交通省ハザードマップポータルサイト（disaportaldata.gsi.go.jp）
+_HAZARD_BASE = "https://disaportaldata.gsi.go.jp/raster"
+_HAZARD_ATTR = '国土交通省 <a href="https://disaportal.gsi.go.jp/" target="_blank">ハザードマップポータルサイト</a>'
+
+HAZARD_LAYERS = [
+    {
+        "name": "🌊 洪水浸水想定区域（想定最大規模）",
+        "path": "01_flood_l2_shinsuishin_data",
+        "show": True,
+    },
+    {
+        "name": "🌊 洪水浸水想定区域（計画規模）",
+        "path": "01_flood_l1_shinsuishin_newlegend_data",
+        "show": False,
+    },
+    {
+        "name": "💧 内水浸水想定区域",
+        "path": "02_naisui_data",
+        "show": False,
+    },
+    {
+        "name": "🌊 高潮浸水想定区域（想定最大規模）",
+        "path": "03_hightide_l2_shinsuishin_data",
+        "show": False,
+    },
+    {
+        "name": "🌊 津波浸水想定",
+        "path": "04_tsunami_newlegend_data",
+        "show": False,
+    },
+    {
+        "name": "⛰️ 土砂災害警戒区域（土石流）",
+        "path": "05_dosekiryukeikaikuiki",
+        "show": False,
+    },
+    {
+        "name": "⛰️ 土砂災害警戒区域（急傾斜地の崩壊）",
+        "path": "05_kyukeishakeikaikuiki",
+        "show": False,
+    },
+    {
+        "name": "⛰️ 土砂災害警戒区域（地すべり）",
+        "path": "05_jisuberikeikaikuiki",
+        "show": False,
+    },
+]
 
 
 # ────────────────────────────────────────────────
@@ -495,7 +544,7 @@ elif submitted:
 # タブ
 # ────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs(["🗺️ GISビューア", "📋 法規レポート", "🏗️ ボリューム検討"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ GISビューア", "📋 法規レポート", "🏗️ ボリューム検討", "🌊 ハザードマップ"])
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TAB 1: GIS MAP
@@ -835,6 +884,79 @@ with tab3:
             st.plotly_chart(fig, use_container_width=True)
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 4: ハザードマップ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+with tab4:
+    _hlat  = st.session_state.lat or 35.6762
+    _hlon  = st.session_state.lon or 139.6503
+    _hzoom = 14 if st.session_state.lat else 6
+
+    # ポータルサイトへのディープリンク
+    portal_url = f"https://disaportal.gsi.go.jp/?ll={_hlat},{_hlon}&z=14&base=pale&vs=c1_z2"
+    if st.session_state.lat:
+        st.info(
+            f"現在の調査地点: **{st.session_state.address}**　"
+            f"[🔗 ハザードマップポータルサイトで詳細確認]({portal_url})",
+            icon="🌊",
+        )
+    else:
+        st.info("住所を検索するか地図をクリックすると、その地点を中心に表示します。", icon="👆")
+
+    st.caption(
+        "⚠️ タイルは国全体の広域データです。市区町村独自の詳細ハザードマップは"
+        "各自治体または[ハザードマップポータルサイト](https://disaportal.gsi.go.jp/)で確認してください。"
+    )
+
+    # ハザードマップ用 Folium 地図
+    hm = folium.Map(location=[_hlat, _hlon], zoom_start=_hzoom, tiles=GSI_TILE, attr=GSI_ATTR)
+
+    # ハザードタイルをレイヤーとして追加
+    for layer in HAZARD_LAYERS:
+        tile_url = f"{_HAZARD_BASE}/{layer['path']}/{{z}}/{{x}}/{{y}}.png"
+        folium.TileLayer(
+            tiles=tile_url,
+            attr=_HAZARD_ATTR,
+            name=layer["name"],
+            overlay=True,
+            control=True,
+            show=layer["show"],
+            opacity=0.7,
+        ).add_to(hm)
+
+    # 調査地点マーカー
+    if st.session_state.lat:
+        folium.Marker(
+            [st.session_state.lat, st.session_state.lon],
+            popup=folium.Popup(st.session_state.address, max_width=250),
+            icon=folium.Icon(color="red", icon="home", prefix="glyphicon"),
+            tooltip="調査地点",
+        ).add_to(hm)
+
+    folium.LayerControl(collapsed=False).add_to(hm)
+
+    st_folium(hm, use_container_width=True, height=580, returned_objects=[])
+
+    st.divider()
+    st.subheader("📋 ハザード凡例（色の目安）")
+    st.markdown("""
+| 色 | 意味（洪水浸水想定区域の場合） |
+|----|-------------------------------|
+| 🟡 薄黄 | 0.5m 未満 |
+| 🟡 黄 | 0.5〜1.0m |
+| 🟠 橙 | 1.0〜2.0m |
+| 🔴 赤橙 | 2.0〜3.0m |
+| 🔴 赤 | 3.0〜5.0m |
+| 🟣 濃赤紫 | 5.0〜10.0m |
+| 🟤 濃紫 | 10.0〜20.0m |
+| ⬛ 黒紫 | 20.0m 以上 |
+
+土砂災害・津波・高潮は各レイヤーで配色が異なります。
+詳細は [ハザードマップポータルサイト 凡例ページ](https://disaportal.gsi.go.jp/) を参照してください。
+""")
+
+
 # ────────────────────────────────────────────────
 # サイドバー
 # ────────────────────────────────────────────────
@@ -855,6 +977,8 @@ with st.sidebar:
 
 → 敷地寸法を入力済みなら **ボリューム検討** タブで 3D エンベロープを確認
 
+→ **ハザードマップ** タブで洪水・土砂・津波・高潮リスクを確認
+
 ---
 
 **GISレイヤー（reinfolib API）**
@@ -865,6 +989,21 @@ with st.sidebar:
 | 防火・準防火 | XKT014 | 赤・橙 |
 | 地区計画 | XKT023 | 青緑 |
 | 都市計画道路 | XKT030 | 茶 |
+
+---
+
+**ハザードマップレイヤー**
+
+| 種別 | 初期表示 |
+|------|---------|
+| 洪水（最大規模） | ON |
+| 洪水（計画規模） | OFF |
+| 内水浸水 | OFF |
+| 高潮（最大規模） | OFF |
+| 津波浸水 | OFF |
+| 土砂（土石流） | OFF |
+| 土砂（急傾斜地） | OFF |
+| 土砂（地すべり） | OFF |
 
 ---
 
