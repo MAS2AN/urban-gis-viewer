@@ -50,6 +50,28 @@ ZONE_COLORS: dict[str, str] = {
     "工業専用地域":             "#8070BA",
 }
 
+# reinfolib の use_area_ja は表記ゆれ（全角アラビア数字・空白）があるため正規化して照合する
+_ZEN2HAN_DIGIT = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def _normalize_zone(name: str) -> str:
+    if not name:
+        return ""
+    s = name.translate(_ZEN2HAN_DIGIT)
+    s = s.replace("　", "").replace(" ", "").strip()
+    # 用途地域名の数字は「一」「二」のみ。アラビア数字で来ても漢数字に寄せる
+    s = s.replace("1", "一").replace("2", "二")
+    return s
+
+
+# 正規化キーで引けるようにした色辞書
+ZONE_COLORS_NORM: dict[str, str] = {_normalize_zone(k): v for k, v in ZONE_COLORS.items()}
+
+
+def zone_color(name: str) -> str:
+    return ZONE_COLORS_NORM.get(_normalize_zone(name), "#AAAAAA")
+
+
 _DEFAULT_ZOOM = 15
 
 
@@ -496,7 +518,7 @@ with tab1:
             zname = p.get("use_area_ja", "")
             bcr   = p.get("u_building_coverage_ratio_ja", "")
             far   = p.get("u_floor_area_ratio_ja", "")
-            color = ZONE_COLORS.get(zname, "#AAAAAA")
+            color = zone_color(zname)
             tip   = f"<b>{zname}</b><br>建ぺい率 {bcr}　容積率 {far}" if zname else "（用途地域なし）"
             try:
                 folium.GeoJson(
