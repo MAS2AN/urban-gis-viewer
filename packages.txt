@@ -1,5 +1,7 @@
 fonts-noto-cjk
 libpango-1.0-0
+libpangoft2-1.0-0
+libpangocairo-1.0-0
 libharfbuzz0b
 libffi-dev
 libgdk-pixbuf-2.0-0
