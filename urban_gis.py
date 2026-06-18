@@ -615,10 +615,10 @@ with tab1:
         st.caption(f"緯度 {st.session_state.lat:.6f} / 経度 {st.session_state.lon:.6f}")
 
         na = "⚠️ 要確認"
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5 = st.columns([3, 1.2, 1.2, 1.8, 1.8])
         c1.metric("用途地域",    _info.get("zone")  or na)
-        c2.metric("指定建ぺい率", _info.get("bcr")   or na)
-        c3.metric("指定容積率",  _info.get("far")   or na)
+        c2.metric("建ぺい率",    _info.get("bcr")   or na)
+        c3.metric("容積率",      _info.get("far")   or na)
         c4.metric("防火規制",    _info.get("fire")  or "指定なし")
         c5.metric("区域区分",    _info.get("kubun") or na)
 
@@ -726,10 +726,10 @@ with tab2:
             zone_info = st.session_state.zone_info
             na = "⚠️ 要確認"
 
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4 = st.columns([3, 1.2, 1.2, 1.8])
             c1.metric("用途地域",     zone_info.get("用途地域", na))
-            c2.metric("指定容積率",   zone_info.get("容積率",   na))
-            c3.metric("指定建ぺい率", zone_info.get("建蔽率",   na))
+            c2.metric("容積率",       zone_info.get("容積率",   na))
+            c3.metric("建ぺい率",     zone_info.get("建蔽率",   na))
             c4.metric("防火規制",     zone_info.get("防火規制", na))
 
             st.divider()
