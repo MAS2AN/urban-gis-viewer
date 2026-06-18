@@ -24,7 +24,10 @@ from streamlit_folium import st_folium
 
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
+from analyze_site import (
+    YOTO_DB, build_report, geocode, research, volume_study,
+    fetch_n05_roads, _n05_stage, _n05_road_name,
+)
 
 # ────────────────────────────────────────────────
 # 定数
@@ -798,6 +801,41 @@ with tab1:
             except Exception:
                 pass
         douro_layer.add_to(m)
+
+    # N05 都市計画道路（広域・国土数値情報）
+    if st.session_state.lat and st.session_state.get("geo"):
+        muni_code = st.session_state.geo.get("muniCode", "")
+        pref_code = muni_code[:2] if len(muni_code) >= 2 else ""
+        n05_key = f"n05_feats_{pref_code}_{st.session_state.lat:.4f}_{st.session_state.lon:.4f}"
+        if pref_code and n05_key not in st.session_state:
+            with st.spinner("N05 都市計画道路を取得中…（初回のみ時間がかかります）"):
+                st.session_state[n05_key] = fetch_n05_roads(
+                    pref_code, st.session_state.lat, st.session_state.lon
+                )
+        n05_feats = st.session_state.get(n05_key, [])
+        if n05_feats:
+            n05_layer = folium.FeatureGroup(
+                name=f"都市計画道路 N05（半径2.5km・{len(n05_feats)}件）", show=False
+            )
+            for feat in n05_feats:
+                p = feat.get("properties", {})
+                color, stage_label = _n05_stage(p)
+                rname = _n05_road_name(p)
+                width_val = p.get("N05_006") or p.get("N05_004") or ""
+                width_str = f"　計画幅員 {width_val}m" if width_val else ""
+                tooltip_text = f"{rname}　[{stage_label}]{width_str}"
+                try:
+                    folium.GeoJson(
+                        feat,
+                        style_function=lambda x, c=color: {
+                            "color": c, "weight": 3.5, "opacity": 0.75,
+                            "fillColor": c, "fillOpacity": 0.25,
+                        },
+                        tooltip=folium.Tooltip(tooltip_text, sticky=False),
+                    ).add_to(n05_layer)
+                except Exception:
+                    pass
+            n05_layer.add_to(m)
 
     # 敷地マーカー
     if st.session_state.lat:

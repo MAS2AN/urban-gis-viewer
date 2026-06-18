@@ -25,6 +25,7 @@ APIキー取得:
 import argparse
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -43,6 +44,132 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0"
 
 CACHE_DIR = Path.home() / ".site_analyzer_cache"
 MLIT_A29_URL = "https://nlftp.mlit.go.jp/ksj/gml/data/A29/A29-19/A29-19_{pref_code}_GML.zip"
+
+# N05 都市計画道路: 年度別URLを新しい順に試す
+MLIT_N05_URLS = [
+    "https://nlftp.mlit.go.jp/ksj/gml/data/N05/N05-22/N05-22_{pref_code}_GML.zip",
+    "https://nlftp.mlit.go.jp/ksj/gml/data/N05/N05-21/N05-21_{pref_code}_GML.zip",
+    "https://nlftp.mlit.go.jp/ksj/gml/data/N05/N05-19/N05-19_{pref_code}_GML.zip",
+    "https://nlftp.mlit.go.jp/ksj/gml/data/N05/N05-18/N05-18_{pref_code}_GML.zip",
+]
+
+# N05 整備区分コード → (色, ラベル)
+N05_STAGE = {
+    1: ("#2244CC", "完成区間"),
+    2: ("#FF8800", "工事中"),
+    3: ("#CC2200", "計画決定"),
+    4: ("#888888", "その他"),
+}
+
+
+def _feature_in_bbox(feat: dict, bbox: tuple) -> bool:
+    """GeoJSONフィーチャの座標がbbox内にあるか判定する。"""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    geom = feat.get("geometry") or {}
+    gtype = geom.get("type", "")
+    coords = geom.get("coordinates", [])
+
+    def in_box(c):
+        return min_lon <= c[0] <= max_lon and min_lat <= c[1] <= max_lat
+
+    if gtype == "Point":
+        return in_box(coords)
+    if gtype in ("LineString", "MultiPoint"):
+        return any(in_box(c) for c in coords)
+    if gtype in ("Polygon", "MultiLineString"):
+        return any(in_box(c) for ring in coords for c in ring)
+    if gtype == "MultiPolygon":
+        return any(in_box(c) for poly in coords for ring in poly for c in ring)
+    return False
+
+
+def _n05_stage(props: dict) -> tuple[str, str]:
+    """N05 プロパティから整備区分を判定し (hex色, ラベル) を返す。"""
+    for key in ("N05_007", "N05_005", "N05_006", "N05_004"):
+        v = props.get(key)
+        if v is not None:
+            try:
+                return N05_STAGE.get(int(v), ("#996633", "都市計画道路"))
+            except (ValueError, TypeError):
+                pass
+    return "#996633", "都市計画道路"
+
+
+def _n05_road_name(props: dict) -> str:
+    """N05 プロパティから路線名を返す。"""
+    return (
+        props.get("N05_003") or props.get("N05_004") or
+        props.get("N05_002") or "都市計画道路"
+    )
+
+
+def fetch_n05_roads(
+    pref_code: str,
+    lat: float,
+    lon: float,
+    radius_km: float = 2.5,
+) -> list:
+    """N05 都市計画道路GeoJSONを取得し、指定半径内のフィーチャを返す。
+
+    都道府県単位ZIPをキャッシュし、BBoxフィルタで半径内フィーチャを抽出する。
+    Returns: list of GeoJSON Feature dicts（空リストの場合はデータ取得失敗）
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── キャッシュ検索 ──────────────────────────
+    cache_path = None
+    for url_tpl in MLIT_N05_URLS:
+        fname = url_tpl.format(pref_code=pref_code).split("/")[-1]
+        cp = CACHE_DIR / fname
+        if cp.exists():
+            cache_path = cp
+            print(f"N05 キャッシュ使用: {cp}", file=sys.stderr)
+            break
+
+    # ── 未キャッシュ → ダウンロード ──────────────
+    if cache_path is None:
+        for url_tpl in MLIT_N05_URLS:
+            url = url_tpl.format(pref_code=pref_code)
+            fname = url.split("/")[-1]
+            cp = CACHE_DIR / fname
+            try:
+                print(f"N05 ダウンロード中: {url}", file=sys.stderr)
+                resp = requests.get(url, timeout=180, stream=True)
+                resp.raise_for_status()
+                with open(cp, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                cache_path = cp
+                print(f"N05 保存完了: {cp} ({cp.stat().st_size // 1024} KB)", file=sys.stderr)
+                break
+            except Exception as e:
+                print(f"N05 失敗 ({url}): {e}", file=sys.stderr)
+
+    if cache_path is None:
+        return []
+
+    # ── BBoxフィルタ ──────────────────────────────
+    lat_d = radius_km / 111.0
+    lon_d = radius_km / (111.0 * math.cos(math.radians(lat)))
+    bbox = (lon - lon_d, lat - lat_d, lon + lon_d, lat + lat_d)
+
+    try:
+        with zipfile.ZipFile(cache_path) as zf:
+            geojson_names = [n for n in zf.namelist() if n.endswith(".geojson")]
+            if not geojson_names:
+                return []
+            features_out = []
+            for gname in geojson_names:
+                with zf.open(gname) as f:
+                    gj = json.load(f)
+                for feat in gj.get("features", []):
+                    if _feature_in_bbox(feat, bbox):
+                        features_out.append(feat)
+        print(f"N05 抽出: {len(features_out)} フィーチャ (半径{radius_km}km)", file=sys.stderr)
+        return features_out
+    except Exception as e:
+        print(f"N05 読込失敗: {e}", file=sys.stderr)
+        return []
 
 # 国土数値情報 A29 用途地域コード → 名称
 A29_YOTO_CODES = {
