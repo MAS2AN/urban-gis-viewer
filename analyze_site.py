@@ -1040,6 +1040,8 @@ def build_report(address: str, geo: dict, zone_info: dict, search_results: list,
 | 地区計画 | {zone_info.get('地区計画', na)} | {_st('地区計画', zone_info.get('地区計画'))} |
 
 > **凡例** ✅ = 一次情報（国土数値情報・reinfolib公式）　⚠️ = Web参考（要確認）　✕ = 未取得 → **⚠️・✕ は必ず行政窓口 / 都市計画GISで確認してください**
+>
+> 🔗 ⚠️・✕ 項目は [toshikeikaku-info.jp](https://toshikeikaku-info.jp/) でも手動確認できます（住所を入力して検索）。
 
 ---
 

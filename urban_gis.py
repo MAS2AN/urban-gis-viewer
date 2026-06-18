@@ -753,11 +753,6 @@ with tab2:
             st.subheader("📋 詳細レポート")
             st.markdown(st.session_state.report)
 
-            st.info(
-                "🔗 ⚠️・✕ 項目は **[toshikeikaku-info.jp](https://toshikeikaku-info.jp/)** でも手動確認できます（住所を入力して検索）。",
-                icon="🔗",
-            )
-
             st.divider()
             safe_name = re.sub(r'[\\/:*?"<>|]', "_", st.session_state.address)
             st.download_button(
