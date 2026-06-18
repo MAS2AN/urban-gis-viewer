@@ -24,10 +24,33 @@ from streamlit_folium import st_folium
 
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze_site import (
-    YOTO_DB, build_report, geocode, research, volume_study,
-    fetch_n05_roads, _n05_stage, _n05_road_name,
-)
+from analyze_site import YOTO_DB, build_report, geocode, research, volume_study, fetch_n05_roads
+
+# N05 表示ヘルパー（analyze_site の N05_STAGE と同期）
+_N05_STAGE_MAP = {
+    1: ("#2244CC", "完成区間"),
+    2: ("#FF8800", "工事中"),
+    3: ("#CC2200", "計画決定"),
+    4: ("#888888", "その他"),
+}
+
+
+def _n05_stage(props: dict):
+    for key in ("N05_007", "N05_005", "N05_006", "N05_004"):
+        v = props.get(key)
+        if v is not None:
+            try:
+                return _N05_STAGE_MAP.get(int(v), ("#996633", "都市計画道路"))
+            except (ValueError, TypeError):
+                pass
+    return "#996633", "都市計画道路"
+
+
+def _n05_road_name(props: dict) -> str:
+    return (
+        props.get("N05_003") or props.get("N05_004") or
+        props.get("N05_002") or "都市計画道路"
+    )
 
 # ────────────────────────────────────────────────
 # 定数
