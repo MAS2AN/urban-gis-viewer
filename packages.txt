@@ -1,0 +1,6 @@
+fonts-noto-cjk
+libpango-1.0-0
+libharfbuzz0b
+libffi-dev
+libgdk-pixbuf2.0-0
+libcairo2

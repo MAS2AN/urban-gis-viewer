@@ -187,6 +187,49 @@ def _dynamic_attr(props: dict) -> str | None:
     )
 
 
+def _report_to_pdf(report_md: str) -> bytes:
+    """Markdown レポートを A4 PDF（バイト列）に変換する。"""
+    import markdown as md_lib
+    from weasyprint import HTML
+
+    html_body = md_lib.markdown(
+        report_md,
+        extensions=["tables", "toc"],
+    )
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: A4; margin: 20mm 18mm; }}
+body {{
+  font-family: "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", "Hiragino Sans", sans-serif;
+  font-size: 9.5pt; line-height: 1.65; color: #222;
+}}
+h1 {{ font-size: 15pt; border-bottom: 2px solid #444; padding-bottom: 4pt; margin-top: 0; }}
+h2 {{ font-size: 12pt; border-bottom: 1px solid #bbb; padding-bottom: 2pt; margin-top: 14pt; }}
+h3 {{ font-size: 10.5pt; margin-top: 10pt; }}
+table {{ border-collapse: collapse; width: 100%; margin: 6pt 0; page-break-inside: avoid; }}
+th, td {{ border: 1px solid #ccc; padding: 4pt 7pt; text-align: left; font-size: 8.5pt; }}
+th {{ background: #f2f2f2; font-weight: bold; }}
+blockquote {{
+  border-left: 3px solid #bbb; margin: 6pt 0 6pt 6pt;
+  padding: 2pt 0 2pt 10pt; color: #555; font-size: 8.5pt;
+}}
+ul, ol {{ margin: 4pt 0; padding-left: 18pt; }}
+li {{ margin-bottom: 2pt; }}
+hr {{ border: none; border-top: 1px solid #ddd; margin: 10pt 0; }}
+a {{ color: #1558b0; text-decoration: none; }}
+code {{ background: #f5f5f5; padding: 1pt 3pt; border-radius: 2pt; font-size: 8pt; }}
+</style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+    return HTML(string=html).write_pdf()
+
+
 def _xkt030_wide(lat: float, lon: float, api_key: str, grid: int = 3, zoom: int = 14) -> list:
     """XKT030 都市計画道路を grid×grid タイルで並列取得し重複除去して返す。
     zoom14: 1タイル≈2.4km、3×3グリッドで≈7km四方をカバー。
@@ -1030,13 +1073,24 @@ with tab2:
 
             st.divider()
             safe_name = re.sub(r'[\\/:*?"<>|]', "_", st.session_state.address)
-            st.download_button(
-                label="📥 レポートをダウンロード（Markdown）",
-                data=st.session_state.report.encode("utf-8"),
-                file_name=f"敷地調査_{safe_name}.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
+            try:
+                pdf_bytes = _report_to_pdf(st.session_state.report)
+                st.download_button(
+                    label="📥 レポートをダウンロード（PDF）",
+                    data=pdf_bytes,
+                    file_name=f"敷地調査_{safe_name}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as _pdf_err:
+                st.warning(f"PDF生成に失敗しました（{_pdf_err}）。Markdownで代替ダウンロードします。")
+                st.download_button(
+                    label="📥 レポートをダウンロード（Markdown）",
+                    data=st.session_state.report.encode("utf-8"),
+                    file_name=f"敷地調査_{safe_name}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
 
             if st.button("🔄 レポートを再生成", help="最新の Web 情報で再取得します"):
                 st.session_state.zone_info = None
