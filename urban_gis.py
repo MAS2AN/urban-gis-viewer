@@ -276,7 +276,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
             p = hit["properties"]
             result["chiku"] = (
                 p.get("district_plan_name_ja") or p.get("name_ja")
-                or p.get("name") or _dynamic_attr(p)
+                or p.get("name") or "計画区域内"
             )
     except Exception as e:
         result["errors"].append(f"XKT023: {e}")
@@ -288,7 +288,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
             p = hit["properties"]
             result["koudo"] = (
                 p.get("high_use_district_ja") or p.get("name_ja")
-                or p.get("name") or _dynamic_attr(p)
+                or p.get("name") or "指定区域"
             )
     except Exception as e:
         result["errors"].append(f"XKT024: {e}")
@@ -300,7 +300,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
             p = hit["properties"]
             result["tochiseibi"] = (
                 p.get("location_normalization_plan_area_ja") or p.get("area_type_ja")
-                or p.get("zone_type_ja") or _dynamic_attr(p)
+                or p.get("zone_type_ja") or "区域内"
             )
     except Exception as e:
         result["errors"].append(f"XKT003: {e}")
@@ -313,8 +313,7 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
             p = hit["properties"]
             result["douro"] = (
                 p.get("road_name_ja") or p.get("city_planning_road_name_ja")
-                or p.get("name_ja") or p.get("name")
-                or _dynamic_attr(p) or "計画区域内"
+                or p.get("name_ja") or p.get("name") or "計画区域内"
             )
     except Exception as e:
         result["errors"].append(f"XKT030: {e}")
