@@ -24,7 +24,7 @@ from streamlit_folium import st_folium
 
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze_site import build_report, geocode, research, volume_study
+from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
 
 # ────────────────────────────────────────────────
 # 定数
@@ -288,8 +288,160 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
 # ────────────────────────────────────────────────
 # 3D ボリューム可視化
 # ────────────────────────────────────────────────
+# 斜線制限 定数・ヘルパー
+# ────────────────────────────────────────────────
 
-def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
+# 道路斜線係数 1.25 適用ゾーン（住居系）、それ以外は 1.5
+_ROAD_SLOPE_RESIDENTIAL = {
+    "第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域",
+    "第一種中高層住居専用地域", "第二種中高層住居専用地域",
+    "第一種住居地域", "第二種住居地域", "準住居地域",
+}
+# 隣地斜線 20m+1.25 適用ゾーン（中高層〜準住居）、それ以外（商業・工業）は 31m+2.5
+_ADJ_SLOPE_RESIDENTIAL = {
+    "第一種中高層住居専用地域", "第二種中高層住居専用地域",
+    "第一種住居地域", "第二種住居地域", "準住居地域",
+}
+# 北側斜線 基点高さ
+_NORTH_SLOPE_LOW = {"第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域"}   # 5m
+_NORTH_SLOPE_MID = {"第一種中高層住居専用地域", "第二種中高層住居専用地域"}               # 10m
+
+
+def _shasen_traces(
+    zone_name: str, site_w: float, site_d: float, road_width: float | None
+) -> list:
+    """道路斜線・隣地斜線・北側斜線の制限面トレースを返す。
+    座標系: y=0 が前面道路側、y=site_d が北側と仮定。
+    建基法第56条第1項各号に基づく斜線係数・起点高さを使用。
+    """
+    traces = []
+    z_data = YOTO_DB.get(zone_name, {})
+
+    # ── 道路斜線制限（第56条第1項第1号）──────────────────────
+    if z_data.get("road") and road_width and road_width > 0:
+        sf = 1.25 if zone_name in _ROAD_SLOPE_RESIDENTIAL else 1.5
+        h0 = road_width * sf              # 前面境界 y=0 での制限高さ
+        hd = (site_d + road_width) * sf  # 後方境界 y=site_d での制限高さ
+
+        traces.append(go.Mesh3d(
+            x=[0, site_w, site_w, 0],
+            y=[0, 0, site_d, site_d],
+            z=[h0, h0, hd, hd],
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            color="#FF7700", opacity=0.13,
+            name=f"道路斜線制限（1:{sf}）", showlegend=True,
+        ))
+        traces.append(go.Scatter3d(
+            x=[0, site_w, site_w, 0, 0],
+            y=[0, 0, site_d, site_d, 0],
+            z=[h0, h0, hd, hd, h0],
+            mode="lines", line=dict(color="#FF7700", width=2, dash="dash"),
+            showlegend=False, hoverinfo="none",
+        ))
+        # 道路境界ライン（太め）
+        traces.append(go.Scatter3d(
+            x=[0, site_w], y=[0, 0], z=[h0, h0],
+            mode="lines", line=dict(color="#FF7700", width=4),
+            showlegend=False, hoverinfo="none",
+        ))
+        traces.append(go.Scatter3d(
+            x=[site_w * 0.5], y=[site_d * 0.15], z=[h0 + (hd - h0) * 0.15 + 1.5],
+            mode="text", text=[f"道路斜線 1:{sf}"],
+            textfont=dict(color="#CC5500", size=11),
+            showlegend=False, hoverinfo="none",
+        ))
+
+    # ── 隣地斜線制限（第56条第1項第2号）──────────────────────
+    # 低層住居専用地域・田園住居地域は絶対高さ制限のため非適用
+    if z_data.get("adj"):
+        is_res = zone_name in _ADJ_SLOPE_RESIDENTIAL
+        base_h = 20.0 if is_res else 31.0
+        adj_sf = 1.25 if is_res else 2.5
+        legend_name = f"隣地斜線制限（{base_h:.0f}m+1:{adj_sf}）"
+
+        # 4 辺それぞれの斜面
+        side_args = [
+            # 前面 y=0
+            ([0, site_w, site_w, 0], [0, 0, site_d, site_d],
+             [base_h, base_h, base_h + site_d * adj_sf, base_h + site_d * adj_sf]),
+            # 背面 y=site_d
+            ([0, site_w, site_w, 0], [site_d, site_d, 0, 0],
+             [base_h, base_h, base_h + site_d * adj_sf, base_h + site_d * adj_sf]),
+            # 左面 x=0
+            ([0, 0, site_w, site_w], [0, site_d, site_d, 0],
+             [base_h, base_h, base_h + site_w * adj_sf, base_h + site_w * adj_sf]),
+            # 右面 x=site_w
+            ([site_w, site_w, 0, 0], [0, site_d, site_d, 0],
+             [base_h, base_h, base_h + site_w * adj_sf, base_h + site_w * adj_sf]),
+        ]
+        for idx, (sx, sy, sz) in enumerate(side_args):
+            traces.append(go.Mesh3d(
+                x=sx, y=sy, z=sz,
+                i=[0, 0], j=[1, 2], k=[2, 3],
+                color="#CC0033", opacity=0.07,
+                name=legend_name if idx == 0 else "",
+                showlegend=(idx == 0),
+            ))
+        # 起点高さ（base_h）の水平ライン
+        traces.append(go.Scatter3d(
+            x=[0, site_w, site_w, 0, 0],
+            y=[0, 0, site_d, site_d, 0],
+            z=[base_h] * 5,
+            mode="lines", line=dict(color="#CC0033", width=2, dash="dot"),
+            showlegend=False, hoverinfo="none",
+        ))
+        traces.append(go.Scatter3d(
+            x=[site_w * 0.5], y=[site_d * 0.5], z=[base_h + 1.5],
+            mode="text", text=[f"隣地斜線起点 {base_h:.0f}m"],
+            textfont=dict(color="#CC0033", size=10),
+            showlegend=False, hoverinfo="none",
+        ))
+
+    # ── 北側斜線制限（第56条第1項第3号）──────────────────────
+    if z_data.get("north"):
+        nb = 5.0 if zone_name in _NORTH_SLOPE_LOW else 10.0
+        # y=site_d が北側境界：南方向（y=0）へ向かって 1:1.25 で立ち上がる
+        h_n = nb                        # 北側境界 y=site_d での制限高さ
+        h_s = nb + site_d * 1.25       # 南側 y=0 での制限高さ
+
+        traces.append(go.Mesh3d(
+            x=[0, site_w, site_w, 0],
+            y=[site_d, site_d, 0, 0],
+            z=[h_n, h_n, h_s, h_s],
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            color="#0055CC", opacity=0.13,
+            name=f"北側斜線制限（{nb:.0f}m+1:1.25）", showlegend=True,
+        ))
+        traces.append(go.Scatter3d(
+            x=[0, site_w, site_w, 0, 0],
+            y=[site_d, site_d, 0, 0, site_d],
+            z=[h_n, h_n, h_s, h_s, h_n],
+            mode="lines", line=dict(color="#0055CC", width=2, dash="dash"),
+            showlegend=False, hoverinfo="none",
+        ))
+        # 北側境界ライン（太め）
+        traces.append(go.Scatter3d(
+            x=[0, site_w], y=[site_d, site_d], z=[h_n, h_n],
+            mode="lines", line=dict(color="#0055CC", width=4),
+            showlegend=False, hoverinfo="none",
+        ))
+        traces.append(go.Scatter3d(
+            x=[site_w * 0.5], y=[site_d * 0.85], z=[h_n + 1.5],
+            mode="text", text=[f"北側斜線 {nb:.0f}m+1:1.25"],
+            textfont=dict(color="#0044AA", size=11),
+            showlegend=False, hoverinfo="none",
+        ))
+
+    return traces
+
+
+# ────────────────────────────────────────────────
+
+def _create_volume_3d(
+    vol: dict, site_w: float, site_d: float,
+    road_width: float | None = None,
+    show_shasen: bool = True,
+) -> go.Figure:
     max_building_area = vol["max_building_area"]
     est_height  = vol["est_height"]
     est_floors  = vol["est_floors"]
@@ -378,6 +530,10 @@ def _create_volume_3d(vol: dict, site_w: float, site_d: float) -> go.Figure:
             mode="lines", line=dict(color="#7FAF7E", width=1),
             showlegend=False, hoverinfo="none",
         ))
+
+    # 斜線制限ラインを追加
+    if show_shasen and vol.get("zone_name"):
+        traces.extend(_shasen_traces(vol["zone_name"], site_w, site_d, road_width))
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -879,8 +1035,15 @@ with tab3:
 
             st.divider()
             st.markdown("**📐 建物エンベロープ（3D）**")
-            st.caption("※敷地を矩形で近似した概算値。前面道路容積率は建基法第52条第2項による。")
-            fig = _create_volume_3d(vol, site_w, site_d)
+            col_cap, col_chk = st.columns([3, 1])
+            with col_cap:
+                st.caption(
+                    "※敷地を矩形で近似した概算値。前面道路容積率は建基法第52条第2項による。"
+                    "　斜線制限は **前方（手前）を前面道路・後方を北側** と仮定した概略表示です（建基法第56条）。"
+                )
+            with col_chk:
+                show_shasen = st.checkbox("📐 斜線制限ラインを表示", value=True)
+            fig = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=show_shasen)
             st.plotly_chart(fig, use_container_width=True)
 
 
