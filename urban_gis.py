@@ -192,6 +192,16 @@ def _report_to_pdf(report_md: str) -> bytes:
     import markdown as md_lib
     from weasyprint import HTML
 
+    # Noto CJK フォントに絵文字グリフがないため、PDF用にテキスト記号へ置換
+    _emoji_map = {
+        "✅": "○", "⚠️": "△", "⚠": "△", "✕": "×",
+        "[ ]": "□", "[x]": "■", "[X]": "■",
+        "🔗": "", "📋": "", "📐": "", "🗺️": "", "🏗️": "", "🌊": "",
+        "🔄": "", "📥": "", "📦": "", "🚀": "",
+    }
+    for src, dst in _emoji_map.items():
+        report_md = report_md.replace(src, dst)
+
     html_body = md_lib.markdown(
         report_md,
         extensions=["tables", "toc"],
