@@ -398,7 +398,8 @@ def _shasen_traces(
         ))
 
     # ── 北側斜線制限（第56条第1項第3号）──────────────────────
-    if z_data.get("north"):
+    # 低層: 5m+1.25 / 中高層: 10m+1.25（日影規制適用時は不適用だが概略表示として描画）
+    if zone_name in _NORTH_SLOPE_LOW or zone_name in _NORTH_SLOPE_MID:
         nb = 5.0 if zone_name in _NORTH_SLOPE_LOW else 10.0
         # y=site_d が北側境界：南方向（y=0）へ向かって 1:1.25 で立ち上がる
         h_n = nb                        # 北側境界 y=site_d での制限高さ
