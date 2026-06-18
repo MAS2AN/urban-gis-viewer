@@ -703,11 +703,6 @@ with tab2:
         st.subheader(f"📍 {st.session_state.address}")
         st.caption(f"緯度 {st.session_state.lat:.6f} / 経度 {st.session_state.lon:.6f}")
 
-        st.markdown(
-            "> 🔗 reinfolib で取得できなかった項目は "
-            "[toshikeikaku-info.jp](https://toshikeikaku-info.jp/) で手動確認できます（住所を入力して検索）。"
-        )
-
         if not st.session_state.zone_info:
             st.info(
                 "「法規レポートを生成」を押すと、**国土数値情報 A29**（一次情報・公式）と "
@@ -757,6 +752,11 @@ with tab2:
             st.divider()
             st.subheader("📋 詳細レポート")
             st.markdown(st.session_state.report)
+
+            st.info(
+                "🔗 ⚠️・✕ 項目は **[toshikeikaku-info.jp](https://toshikeikaku-info.jp/)** でも手動確認できます（住所を入力して検索）。",
+                icon="🔗",
+            )
 
             st.divider()
             safe_name = re.sub(r'[\\/:*?"<>|]', "_", st.session_state.address)
