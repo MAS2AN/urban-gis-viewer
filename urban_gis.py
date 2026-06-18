@@ -370,8 +370,23 @@ st.markdown("""
     background: #FFFFFF;
     border: 1px solid #C8D8E8;
     border-radius: 12px;
-    padding: 1rem 1.2rem;
+    padding: 0.75rem 0.9rem;
     box-shadow: 0 2px 8px rgba(26,75,140,0.07);
+    overflow: hidden;
+}
+[data-testid="stMetricLabel"] > div {
+    font-size: 0.75rem !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+[data-testid="stMetricValue"] > div {
+    font-size: 0.9rem !important;
+    font-weight: 700 !important;
+    line-height: 1.3 !important;
+    word-break: break-all;
+    overflow-wrap: break-word;
+    white-space: normal !important;
 }
 [data-testid="stForm"] {
     background: #FFFFFF;
