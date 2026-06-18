@@ -9,6 +9,7 @@
   Tab 4 - 🌊 ハザードマップ  : 国交省ハザードマップポータル XYZ タイル（洪水・土砂・津波・高潮等）
 """
 
+import concurrent.futures as cf
 import math
 import os
 import re
@@ -24,33 +25,7 @@ from streamlit_folium import st_folium
 
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
-from analyze_site import YOTO_DB, build_report, geocode, research, volume_study, fetch_n05_roads
-
-# N05 表示ヘルパー（analyze_site の N05_STAGE と同期）
-_N05_STAGE_MAP = {
-    1: ("#2244CC", "完成区間"),
-    2: ("#FF8800", "工事中"),
-    3: ("#CC2200", "計画決定"),
-    4: ("#888888", "その他"),
-}
-
-
-def _n05_stage(props: dict):
-    for key in ("N05_007", "N05_005", "N05_006", "N05_004"):
-        v = props.get(key)
-        if v is not None:
-            try:
-                return _N05_STAGE_MAP.get(int(v), ("#996633", "都市計画道路"))
-            except (ValueError, TypeError):
-                pass
-    return "#996633", "都市計画道路"
-
-
-def _n05_road_name(props: dict) -> str:
-    return (
-        props.get("N05_003") or props.get("N05_004") or
-        props.get("N05_002") or "都市計画道路"
-    )
+from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
 
 # ────────────────────────────────────────────────
 # 定数
@@ -212,6 +187,39 @@ def _dynamic_attr(props: dict) -> str | None:
     )
 
 
+def _xkt030_wide(lat: float, lon: float, api_key: str, grid: int = 3, zoom: int = 14) -> list:
+    """XKT030 都市計画道路を grid×grid タイルで並列取得し重複除去して返す。
+    zoom14: 1タイル≈2.4km、3×3グリッドで≈7km四方をカバー。
+    """
+    cx, cy = _lat_lon_to_tile(lat, lon, zoom)
+    half = grid // 2
+    tiles = [(cx + dx, cy + dy) for dx in range(-half, half + 1) for dy in range(-half, half + 1)]
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+
+    def fetch_tile(tx_ty):
+        tx, ty = tx_ty
+        try:
+            params = {"response_format": "geojson", "z": zoom, "x": tx, "y": ty}
+            resp = requests.get(
+                f"{REINFOLIB_BASE}/XKT030", headers=headers, params=params, timeout=10
+            )
+            if resp.status_code == 200:
+                return resp.json().get("features", [])
+        except Exception:
+            pass
+        return []
+
+    seen, features = set(), []
+    with cf.ThreadPoolExecutor(max_workers=len(tiles)) as pool:
+        for tile_feats in pool.map(fetch_tile, tiles):
+            for feat in tile_feats:
+                key = str(feat.get("geometry", {}).get("coordinates", ""))[:120]
+                if key not in seen:
+                    seen.add(key)
+                    features.append(feat)
+    return features
+
+
 def reverse_geocode(lat: float, lon: float) -> str:
     try:
         resp = requests.get(REVERSE_GEO_URL, params={"lat": lat, "lon": lon}, timeout=8)
@@ -227,7 +235,8 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
         "fire": None, "kubun": None, "chiku": None, "koudo": None,
         "tochiseibi": None, "douro": None,
         "errors": [],
-        "zone_features": [], "fire_features": [], "chiku_features": [], "douro_features": [],
+        "zone_features": [], "fire_features": [], "chiku_features": [],
+        "douro_features": [], "douro_wide_features": [],
     }
 
     try:
@@ -309,6 +318,11 @@ def fetch_planning_info(lat: float, lon: float, api_key: str) -> dict:
             )
     except Exception as e:
         result["errors"].append(f"XKT030: {e}")
+
+    try:
+        result["douro_wide_features"] = _xkt030_wide(lat, lon, api_key)
+    except Exception as e:
+        result["errors"].append(f"XKT030_wide: {e}")
 
     if result["zone"] and not result["kubun"]:
         result["kubun"] = "市街化区域"
@@ -830,44 +844,30 @@ with tab1:
                 pass
         douro_layer.add_to(m)
 
-    # N05 都市計画道路（広域・国土数値情報）
-    # キーは都道府県単位（同一都道府県内なら再利用）、None=未取得 / []=取得失敗 / [...]=データあり
-    if st.session_state.lat and st.session_state.get("geo"):
-        muni_code = st.session_state.geo.get("muniCode", "")
-        pref_code = muni_code[:2] if len(muni_code) >= 2 else ""
-        n05_key = f"n05_feats_{pref_code}"
-        if pref_code and n05_key not in st.session_state:
-            st.session_state[n05_key] = None  # 未取得マーク
-        if st.session_state.get(n05_key) is None and pref_code:
-            with st.spinner("N05 都市計画道路を取得中…（初回のみ時間がかかります）"):
-                fetched = fetch_n05_roads(pref_code, st.session_state.lat, st.session_state.lon)
-                st.session_state[n05_key] = fetched if fetched else []
-        n05_feats = st.session_state.get(n05_key) or []
-        if n05_feats:
-            n05_layer = folium.FeatureGroup(
-                name=f"都市計画道路 N05（半径2.5km・{len(n05_feats)}件）", show=False
+    # 都市計画道路 広域レイヤー（XKT030 zoom14 3×3グリッド）
+    douro_wide_feats = _info.get("douro_wide_features", [])
+    if douro_wide_feats:
+        douro_wide_layer = folium.FeatureGroup(
+            name=f"都市計画道路 広域（{len(douro_wide_feats)}件）", show=False
+        )
+        for feat in douro_wide_feats:
+            p = feat.get("properties", {})
+            dname = (
+                p.get("road_name_ja") or p.get("city_planning_road_name_ja")
+                or p.get("name_ja") or p.get("name", "都市計画道路")
             )
-            for feat in n05_feats:
-                p = feat.get("properties", {})
-                color, stage_label = _n05_stage(p)
-                rname = _n05_road_name(p)
-                width_val = p.get("N05_006") or p.get("N05_004") or ""
-                width_str = f"　計画幅員 {width_val}m" if width_val else ""
-                tooltip_text = f"{rname}　[{stage_label}]{width_str}"
-                try:
-                    folium.GeoJson(
-                        feat,
-                        style_function=lambda x, c=color: {
-                            "color": c, "weight": 3.5, "opacity": 0.75,
-                            "fillColor": c, "fillOpacity": 0.25,
-                        },
-                        tooltip=folium.Tooltip(tooltip_text, sticky=False),
-                    ).add_to(n05_layer)
-                except Exception:
-                    pass
-            n05_layer.add_to(m)
-        elif st.session_state.get(n05_key) == []:
-            st.caption("⚠️ N05都市計画道路: データ未取得（MLITサーバーへの接続に失敗しました）")
+            try:
+                folium.GeoJson(
+                    feat,
+                    style_function=lambda x: {
+                        "color": "#8B0000", "weight": 3.0, "opacity": 0.8,
+                        "fillColor": "#8B0000", "fillOpacity": 0.3,
+                    },
+                    tooltip=folium.Tooltip(dname, sticky=False),
+                ).add_to(douro_wide_layer)
+            except Exception:
+                pass
+        douro_wide_layer.add_to(m)
 
     # 敷地マーカー
     if st.session_state.lat:
