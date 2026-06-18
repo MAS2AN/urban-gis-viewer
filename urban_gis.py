@@ -204,7 +204,12 @@ def _hit(features: list[dict], lat: float, lon: float) -> dict | None:
 
 
 def _dynamic_attr(props: dict) -> str | None:
-    return next((v for v in props.values() if isinstance(v, str) and len(v) > 2), None)
+    """日本語文字（ひらがな・カタカナ・漢字）を含む値だけ返す。内部IDや英数字ハッシュは除外。"""
+    return next(
+        (v for v in props.values()
+         if isinstance(v, str) and any('぀' <= c <= '鿿' for c in v)),
+        None,
+    )
 
 
 def reverse_geocode(lat: float, lon: float) -> str:
@@ -826,16 +831,18 @@ with tab1:
         douro_layer.add_to(m)
 
     # N05 都市計画道路（広域・国土数値情報）
+    # キーは都道府県単位（同一都道府県内なら再利用）、None=未取得 / []=取得失敗 / [...]=データあり
     if st.session_state.lat and st.session_state.get("geo"):
         muni_code = st.session_state.geo.get("muniCode", "")
         pref_code = muni_code[:2] if len(muni_code) >= 2 else ""
-        n05_key = f"n05_feats_{pref_code}_{st.session_state.lat:.4f}_{st.session_state.lon:.4f}"
+        n05_key = f"n05_feats_{pref_code}"
         if pref_code and n05_key not in st.session_state:
+            st.session_state[n05_key] = None  # 未取得マーク
+        if st.session_state.get(n05_key) is None and pref_code:
             with st.spinner("N05 都市計画道路を取得中…（初回のみ時間がかかります）"):
-                st.session_state[n05_key] = fetch_n05_roads(
-                    pref_code, st.session_state.lat, st.session_state.lon
-                )
-        n05_feats = st.session_state.get(n05_key, [])
+                fetched = fetch_n05_roads(pref_code, st.session_state.lat, st.session_state.lon)
+                st.session_state[n05_key] = fetched if fetched else []
+        n05_feats = st.session_state.get(n05_key) or []
         if n05_feats:
             n05_layer = folium.FeatureGroup(
                 name=f"都市計画道路 N05（半径2.5km・{len(n05_feats)}件）", show=False
@@ -859,6 +866,8 @@ with tab1:
                 except Exception:
                     pass
             n05_layer.add_to(m)
+        elif st.session_state.get(n05_key) == []:
+            st.caption("⚠️ N05都市計画道路: データ未取得（MLITサーバーへの接続に失敗しました）")
 
     # 敷地マーカー
     if st.session_state.lat:
