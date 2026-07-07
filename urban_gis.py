@@ -26,6 +26,13 @@ from streamlit_folium import st_folium
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
+from shadow_calc import calc_shadows, suggest_height_solar
+
+_COMPASS_GRID = [
+    [("↖ 北西", 315), ("↑ 北",  0),   ("↗ 北東",  45)],
+    [("← 西",   270), None,            ("→ 東",    90)],
+    [("↙ 南西", 225), ("↓ 南",  180),  ("↘ 南東", 135)],
+]
 
 # ────────────────────────────────────────────────
 # 定数
@@ -666,6 +673,7 @@ for _key, _default in [
     ("geo", None), ("info", {}), ("processed_click", None),
     ("zone_info", None), ("report", None),
     ("site_w", 0.0), ("site_d", 0.0), ("road_w", 0.0),
+    ("road_bearing_deg", 180), ("road_bearing_label", "南"),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
@@ -746,6 +754,39 @@ if not api_key:
 # ────────────────────────────────────────────────
 # 住所検索フォーム
 # ────────────────────────────────────────────────
+
+# ── 前面道路の方角コンパス（フォーム外・session_state で保持）──
+with st.container():
+    st.markdown("**🧭 前面道路の方角**（クリックで選択）")
+    _comp_rows = [st.columns([1, 1, 1, 0.05, 2]) for _ in range(3)]
+    for _ri, _row in enumerate(_COMPASS_GRID):
+        for _ci, _cell in enumerate(_row):
+            with _comp_rows[_ri][_ci]:
+                if _cell is None:
+                    st.markdown(
+                        "<div style='text-align:center;line-height:2.4rem;font-size:1.3rem'>🏢</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    _lbl, _deg = _cell
+                    if st.button(
+                        _lbl, key=f"brg_{_deg}", use_container_width=True,
+                        type="primary" if st.session_state.road_bearing_deg == _deg else "secondary",
+                    ):
+                        st.session_state.road_bearing_deg   = _deg
+                        st.session_state.road_bearing_label = _lbl.split()[-1]
+                        st.rerun()
+        if _ri == 1:
+            with _comp_rows[1][4]:
+                st.markdown(
+                    f"<div style='padding:6px 10px;background:#DFF0DE;border-radius:8px;"
+                    f"border:1px solid #5B8C5A;font-size:0.9rem'>"
+                    f"✅ <b>{st.session_state.road_bearing_label}側</b> に前面道路<br>"
+                    f"<span style='color:#666;font-size:0.8rem'>({st.session_state.road_bearing_deg}°)</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+st.markdown("")
 
 with st.form("search_form"):
     address_input = st.text_input(
@@ -1179,6 +1220,79 @@ with tab3:
                 show_shasen = st.checkbox("📐 斜線制限ラインを表示", value=True)
             fig = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=show_shasen)
             st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
+            st.subheader("☀️ 等時間日影チェック（冬至日・概算）")
+            st.caption(
+                "建基法第56条の2 に基づく概算計算です（2mグリッド・30分刻み・確認申請レベルではありません）。"
+                f"　前面道路: **{st.session_state.road_bearing_label}側**（コンパスで変更できます）"
+            )
+
+            _sh_col1, _sh_col2 = st.columns(2)
+            with _sh_col1:
+                _meas_h_opt = st.selectbox(
+                    "日影測定面高さ",
+                    options=["1.5 m（低層住専等）", "4.0 m（その他住居系）", "6.5 m（商業系）"],
+                    index=0, key="sh_meas_h",
+                )
+            with _sh_col2:
+                _thresh_opt = st.selectbox(
+                    "日影規制 時間数",
+                    options=["3 時間", "4 時間", "5 時間"],
+                    index=1, key="sh_thresh",
+                )
+
+            _meas_h_m = float(_meas_h_opt.split()[0])
+            _thresh_h = int(_thresh_opt.split()[0])
+            _bearing  = st.session_state.get("road_bearing_deg", 180)
+
+            _ratio   = site_w / site_d if site_d > 0 else 1.0
+            _bldg_w  = math.sqrt(vol["max_building_area"] * _ratio)
+            _bldg_d  = math.sqrt(vol["max_building_area"] / _ratio)
+            _px0     = max((site_w - _bldg_w) / 2, 0)
+            _py0     = max((site_d - _bldg_d) / 2, 0)
+            _bldg_fp = [
+                (_px0, _py0), (_px0 + _bldg_w, _py0),
+                (_px0 + _bldg_w, _py0 + _bldg_d), (_px0, _py0 + _bldg_d),
+            ]
+
+            with st.spinner("日影計算中（冬至日 8〜16時 / 2mグリッド）…"):
+                _sh_res = calc_shadows(
+                    _bldg_fp, vol["est_height"], _meas_h_m,
+                    st.session_state.lat, st.session_state.lon,
+                    _bearing, _thresh_h, site_w, site_d,
+                )
+
+            # 日影を重ねた3D図
+            fig2 = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
+            for _t in _sh_res["traces"]:
+                fig2.add_trace(_t)
+            st.caption(
+                f"冬至日 / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
+                "│ 🟠 敷地内  🔴 敷地外逸脱  🔵 全日影ユニオン"
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            if _sh_res["violation"]:
+                st.error(
+                    f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
+                    f"{_thresh_h}時間日影が敷地外へ **{_sh_res['violation_area_m2']:.0f}㎡** 逸脱します。"
+                )
+                with st.spinner("適合高さをバイナリサーチ中…"):
+                    _sug_h = suggest_height_solar(
+                        _bldg_fp, vol["est_height"], _meas_h_m,
+                        st.session_state.lat, st.session_state.lon,
+                        _bearing, _thresh_h, site_w, site_d,
+                    )
+                if _sug_h > 0:
+                    st.info(f"💡 **縮小案: H ≤ {_sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
+                else:
+                    st.warning("H=1m でも逸脱するため、用途地域・建物位置の再検討が必要です。")
+            else:
+                st.success(
+                    f"✅ **日影OK**: {_thresh_h}時間日影は敷地内に収まります "
+                    f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
+                )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
