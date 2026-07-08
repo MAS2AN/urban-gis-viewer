@@ -305,47 +305,37 @@ def calc_volume_from_shadow(
     site_w: float,
     site_d: float,
     grid_res: float = 2.0,
-    margin: float = 30.0,
+    margin: float = 30.0,  # unused (kept for API compatibility)
 ) -> dict:
     """
-    逆日影ボリューム: フットプリント内の各点で「日影規制を満たす最大建物高さ」を求め
-    高さ分布を持つ3D建物形状として返す。
+    逆日影ボリューム: フットプリント内の各点で「影が敷地境界に届くN番目の最小高さ」を求め
+    高さ分布を持つ3D建物エンベロープとして返す。
 
-    各フットプリント点を独立した柱として計算（保守的近似）。
-    高い位置（赤/暖色）= より高く建てられる、低い位置（青/寒色）= 規制が厳しい。
+    計算原理: 各フットプリント点(gx,gy)で各時刻に影方向の敷地境界距離d_bndを求め
+    H = meas_h + d_bnd × tan(alt) をソートしてN番目の値を高さ制限とする。
+    北境界に近い点ほど d_bnd が小さく→高さ制限低い(低層化が必要)。
+    南(道路)側ほど d_bnd が大きく→高くできる。
 
     Returns: {traces, height_map: {(gx,gy): h_max}}
     """
     import plotly.graph_objects as go
 
     # 時刻ごとの影方向プリコンピュート
-    times, t_cur = [], TIME_START
-    while t_cur <= TIME_END + 1e-9:
-        times.append(t_cur); t_cur += TIME_STEP
-
     sun_data = []
-    for hr in times:
-        alt_d, az_d = solar_position(hr, lat_deg, lon_deg)
-        if alt_d < 2.0:
-            sun_data.append(None); continue
-        geo_dx = -math.sin(math.radians(az_d))
-        geo_dy = -math.cos(math.radians(az_d))
-        pdx, pdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
-        sun_data.append((math.radians(alt_d), pdx, pdy))
+    t_cur = TIME_START
+    while t_cur <= TIME_END + 1e-9:
+        alt_d, az_d = solar_position(t_cur, lat_deg, lon_deg)
+        if alt_d >= 2.0:
+            geo_dx = -math.sin(math.radians(az_d))
+            geo_dy = -math.cos(math.radians(az_d))
+            pdx, pdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
+            sun_data.append((math.radians(alt_d), pdx, pdy))
+        t_cur += TIME_STEP
+
+    if not sun_data:
+        return {"traces": [], "height_map": {}}
 
     n_steps_needed = max(1, int(round(threshold_h / TIME_STEP)))
-
-    # 測定点グリッド（敷地外・やや粗め）
-    meas_res = max(grid_res * 2, 4.0)
-    meas_pts = []
-    mx = -margin
-    while mx <= site_w + margin + 1e-6:
-        my = -margin
-        while my <= site_d + margin + 1e-6:
-            if not _in_rect(mx, my, site_w, site_d, tol=0.5):
-                meas_pts.append((mx, my))
-            my += meas_res
-        mx += meas_res
 
     # フットプリント bbox
     xs = [p[0] for p in bldg_fp]; ys = [p[1] for p in bldg_fp]
@@ -360,25 +350,38 @@ def calc_volume_from_shadow(
             if not _in_poly(gx, gy, bldg_fp):
                 gy += grid_res; continue
 
-            min_h_limit = None
-            for (px, py) in meas_pts:
-                h_vals = []
-                for sd in sun_data:
-                    if sd is None: continue
-                    alt_r, sdx, sdy = sd
-                    vx_, vy_ = px - gx, py - gy
-                    L = vx_ * sdx + vy_ * sdy        # 影方向への投影距離
-                    if L < 1e-3: continue
-                    cross = abs(vx_ * sdy - vy_ * sdx)  # 影方向との横ずれ
-                    if cross > grid_res: continue        # 影の幅から外れる測定点はスキップ
-                    h_vals.append(meas_h_m + L * math.tan(alt_r))
-                h_vals.sort()
-                if len(h_vals) >= n_steps_needed:
-                    h_lim = h_vals[n_steps_needed - 1]
-                    if min_h_limit is None or h_lim < min_h_limit:
-                        min_h_limit = h_lim
+            h_vals = []
+            for alt_r, sdx, sdy in sun_data:
+                # 各影方向で敷地境界(0..site_w × 0..site_d)までの最短距離を求める
+                # 影方向に沿って最初に当たる境界の t を計算
+                if sdx > 1e-6:
+                    tx = (site_w - gx) / sdx   # 東境界まで
+                elif sdx < -1e-6:
+                    tx = (0.0 - gx) / sdx      # 西境界まで (tx>0)
+                else:
+                    tx = 1e9
 
-            height_map[(gx, gy)] = min(min_h_limit, 80.0) if min_h_limit is not None else 80.0
+                if sdy > 1e-6:
+                    ty = (site_d - gy) / sdy   # 北境界まで
+                elif sdy < -1e-6:
+                    ty = (0.0 - gy) / sdy      # 南境界まで (ty>0)
+                else:
+                    ty = 1e9
+
+                d_bnd = min(tx, ty)
+                if d_bnd > 0.1:
+                    h_vals.append(meas_h_m + d_bnd * math.tan(alt_r))
+
+            h_vals.sort()
+            if len(h_vals) >= n_steps_needed:
+                # N番目に小さいH = N時間後にちょうど境界に影が届く高さ
+                height_map[(gx, gy)] = h_vals[n_steps_needed - 1]
+            elif h_vals:
+                # 境界に届く時間数がN未満 = 規制上かなり余裕 → 最大値をキャップ
+                height_map[(gx, gy)] = min(h_vals[-1] * 1.5, 60.0)
+            else:
+                height_map[(gx, gy)] = 60.0
+
             gy += grid_res
         gx += grid_res
 
@@ -386,9 +389,9 @@ def calc_volume_from_shadow(
         return {"traces": [], "height_map": {}}
 
     # ── Mesh3d: 各グリッドセルを直方体バーとして結合 ──
-    s = grid_res / 2 * 0.9   # セル半辺（小さめにして隙間を作る）
+    s = grid_res / 2 * 0.88   # セル半辺（隙間あり）
     h_vals_all = list(height_map.values())
-    h_lo = max(0, min(h_vals_all))
+    h_lo = max(0.0, min(h_vals_all))
     h_hi = max(h_vals_all)
 
     vx_all, vy_all, vz_all, intens_all = [], [], [], []
@@ -397,16 +400,13 @@ def calc_volume_from_shadow(
 
     for (cgx, cgy), h in height_map.items():
         h = max(0.1, h)
-        # 8頂点（底面4 + 上面4）
         vx_all.extend([cgx-s, cgx+s, cgx+s, cgx-s, cgx-s, cgx+s, cgx+s, cgx-s])
         vy_all.extend([cgy-s, cgy-s, cgy+s, cgy+s, cgy-s, cgy-s, cgy+s, cgy+s])
         vz_all.extend([0, 0, 0, 0, h, h, h, h])
-        intens_all.extend([h] * 8)   # 全頂点に高さをintensityとして設定
+        intens_all.extend([h] * 8)
 
         b = v_off
-        # 上面2三角形
         ii_all += [b+4, b+4]; jj_all += [b+5, b+6]; kk_all += [b+6, b+7]
-        # 4側面（各2三角形）
         for i0, i1, i2, i3 in [(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)]:
             ii_all += [b+i0, b+i1]; jj_all += [b+i1, b+i2]; kk_all += [b+i2, b+i3]
         v_off += 8
@@ -423,7 +423,7 @@ def calc_volume_from_shadow(
         opacity=0.85,
         name="逆日影ボリューム",
         showlegend=True,
-        hovertemplate="X:%{x:.0f}m Y:%{y:.0f}m<br>最大高さ:%{z:.1f}m<extra></extra>",
+        hovertemplate="X:%{x:.0f}m Y:%{y:.0f}m<br>許容最大高さ:%{z:.1f}m<extra></extra>",
     )]
 
     return {"traces": traces, "height_map": height_map}
