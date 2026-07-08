@@ -1286,6 +1286,39 @@ with tab3:
                     )
                 if _sug_h > 0:
                     st.info(f"💡 **縮小案: H ≤ {_sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
+
+                    # ── 縮小案モデルの日影チェック ──
+                    st.markdown(f"**📐 縮小案モデル（H={_sug_h:.1f}m）の等時間日影**")
+                    _sug_vol = dict(vol)
+                    _sug_vol["est_height"] = _sug_h
+                    _sug_vol["est_floors"] = max(1, int(math.ceil(_sug_h / vol.get("floor_height", 3.5))))
+
+                    with st.spinner(f"縮小案（H={_sug_h:.1f}m）の日影を計算中…"):
+                        _sug_sh_res = calc_shadows(
+                            _bldg_fp, _sug_h, _meas_h_m,
+                            st.session_state.lat, st.session_state.lon,
+                            _bearing, _thresh_h, site_w, site_d,
+                        )
+
+                    fig3 = _create_volume_3d(_sug_vol, site_w, site_d, road_width=road_w, show_shasen=False)
+                    for _t in _sug_sh_res["traces"]:
+                        fig3.add_trace(_t)
+                    st.caption(
+                        f"縮小案 H={_sug_h:.1f}m / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
+                        "│ 🟠 敷地内  🔴 敷地外逸脱"
+                    )
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                    if _sug_sh_res["violation"]:
+                        st.warning(
+                            f"⚠️ 縮小案でもわずかに逸脱（{_sug_sh_res['violation_area_m2']:.0f}㎡）。"
+                            "グリッド誤差の範囲内のため、詳細検討では専用ソフトで確認してください。"
+                        )
+                    else:
+                        st.success(
+                            f"✅ 縮小案（H={_sug_h:.1f}m）では{_thresh_h}時間日影が敷地内に収まります "
+                            f"（等時間日影面積 {_sug_sh_res['iso_area_m2']:.0f}㎡）"
+                        )
                 else:
                     st.warning("H=1m でも逸脱するため、用途地域・建物位置の再検討が必要です。")
             else:
