@@ -1,9 +1,12 @@
 """
-等時間日影・斜線制限 計算モジュール（Streamlit Web UI 用）
+等時間日影・斜線制限・逆日影 計算モジュール（Streamlit Web UI 用）
 
 外部ライブラリ: math のみ（Plotly は呼び出し側でインポート）
 計算条件: 冬至日(12/21) / JST 真太陽時補正 / 30分刻み / 2mグリッド
 ⚠ 概算値（営業・相談段階）確認申請には専用ソフトが必要
+exports: solar_position, calc_shadows, suggest_height_solar,
+         calc_reverse_shadow, calc_height_limits,
+         road_setback_traces, north_setback_traces
 """
 import math
 
