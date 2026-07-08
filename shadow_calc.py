@@ -294,6 +294,140 @@ def _ray_to_polygon_entry(px, py, dx, dy, polygon):
     return min_t
 
 
+def calc_volume_from_shadow(
+    bldg_fp: list,
+    meas_h_m: float,
+    lat_deg: float,
+    lon_deg: float,
+    road_bearing_deg: float,
+    threshold_h: float,
+    site_w: float,
+    site_d: float,
+    grid_res: float = 2.0,
+    margin: float = 30.0,
+) -> dict:
+    """
+    逆日影ボリューム: フットプリント内の各点で「日影規制を満たす最大建物高さ」を求め
+    高さ分布を持つ3D建物形状として返す。
+
+    各フットプリント点を独立した柱として計算（保守的近似）。
+    高い位置（赤/暖色）= より高く建てられる、低い位置（青/寒色）= 規制が厳しい。
+
+    Returns: {traces, height_map: {(gx,gy): h_max}}
+    """
+    import plotly.graph_objects as go
+
+    # 時刻ごとの影方向プリコンピュート
+    times, t_cur = [], TIME_START
+    while t_cur <= TIME_END + 1e-9:
+        times.append(t_cur); t_cur += TIME_STEP
+
+    sun_data = []
+    for hr in times:
+        alt_d, az_d = solar_position(hr, lat_deg, lon_deg)
+        if alt_d < 2.0:
+            sun_data.append(None); continue
+        geo_dx = -math.sin(math.radians(az_d))
+        geo_dy = -math.cos(math.radians(az_d))
+        pdx, pdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
+        sun_data.append((math.radians(alt_d), pdx, pdy))
+
+    n_steps_needed = max(1, int(round(threshold_h / TIME_STEP)))
+
+    # 測定点グリッド（敷地外・やや粗め）
+    meas_res = max(grid_res * 2, 4.0)
+    meas_pts = []
+    mx = -margin
+    while mx <= site_w + margin + 1e-6:
+        my = -margin
+        while my <= site_d + margin + 1e-6:
+            if not _in_rect(mx, my, site_w, site_d, tol=0.5):
+                meas_pts.append((mx, my))
+            my += meas_res
+        mx += meas_res
+
+    # フットプリント bbox
+    xs = [p[0] for p in bldg_fp]; ys = [p[1] for p in bldg_fp]
+    fp_x0, fp_x1 = min(xs), max(xs)
+    fp_y0, fp_y1 = min(ys), max(ys)
+
+    height_map = {}
+    gx = fp_x0
+    while gx <= fp_x1 + 1e-6:
+        gy = fp_y0
+        while gy <= fp_y1 + 1e-6:
+            if not _in_poly(gx, gy, bldg_fp):
+                gy += grid_res; continue
+
+            min_h_limit = None
+            for (px, py) in meas_pts:
+                h_vals = []
+                for sd in sun_data:
+                    if sd is None: continue
+                    alt_r, sdx, sdy = sd
+                    vx_, vy_ = px - gx, py - gy
+                    L = vx_ * sdx + vy_ * sdy        # 影方向への投影距離
+                    if L < 1e-3: continue
+                    cross = abs(vx_ * sdy - vy_ * sdx)  # 影方向との横ずれ
+                    if cross > grid_res: continue        # 影の幅から外れる測定点はスキップ
+                    h_vals.append(meas_h_m + L * math.tan(alt_r))
+                h_vals.sort()
+                if len(h_vals) >= n_steps_needed:
+                    h_lim = h_vals[n_steps_needed - 1]
+                    if min_h_limit is None or h_lim < min_h_limit:
+                        min_h_limit = h_lim
+
+            height_map[(gx, gy)] = min(min_h_limit, 80.0) if min_h_limit is not None else 80.0
+            gy += grid_res
+        gx += grid_res
+
+    if not height_map:
+        return {"traces": [], "height_map": {}}
+
+    # ── Mesh3d: 各グリッドセルを直方体バーとして結合 ──
+    s = grid_res / 2 * 0.9   # セル半辺（小さめにして隙間を作る）
+    h_vals_all = list(height_map.values())
+    h_lo = max(0, min(h_vals_all))
+    h_hi = max(h_vals_all)
+
+    vx_all, vy_all, vz_all, intens_all = [], [], [], []
+    ii_all, jj_all, kk_all = [], [], []
+    v_off = 0
+
+    for (cgx, cgy), h in height_map.items():
+        h = max(0.1, h)
+        # 8頂点（底面4 + 上面4）
+        vx_all.extend([cgx-s, cgx+s, cgx+s, cgx-s, cgx-s, cgx+s, cgx+s, cgx-s])
+        vy_all.extend([cgy-s, cgy-s, cgy+s, cgy+s, cgy-s, cgy-s, cgy+s, cgy+s])
+        vz_all.extend([0, 0, 0, 0, h, h, h, h])
+        intens_all.extend([h] * 8)   # 全頂点に高さをintensityとして設定
+
+        b = v_off
+        # 上面2三角形
+        ii_all += [b+4, b+4]; jj_all += [b+5, b+6]; kk_all += [b+6, b+7]
+        # 4側面（各2三角形）
+        for i0, i1, i2, i3 in [(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)]:
+            ii_all += [b+i0, b+i1]; jj_all += [b+i1, b+i2]; kk_all += [b+i2, b+i3]
+        v_off += 8
+
+    traces = [go.Mesh3d(
+        x=vx_all, y=vy_all, z=vz_all,
+        i=ii_all, j=jj_all, k=kk_all,
+        intensity=intens_all,
+        intensitymode="vertex",
+        colorscale=[[0.0,"#2C6BA4"],[0.4,"#F5D020"],[0.75,"#E6781E"],[1.0,"#CC2222"]],
+        cmin=h_lo, cmax=h_hi,
+        showscale=True,
+        colorbar=dict(title="最大高さ(m)", thickness=14, len=0.55, x=1.02),
+        opacity=0.85,
+        name="逆日影ボリューム",
+        showlegend=True,
+        hovertemplate="X:%{x:.0f}m Y:%{y:.0f}m<br>最大高さ:%{z:.1f}m<extra></extra>",
+    )]
+
+    return {"traces": traces, "height_map": height_map}
+
+
 def calc_reverse_shadow(
     bldg_fp: list,
     meas_h_m: float,

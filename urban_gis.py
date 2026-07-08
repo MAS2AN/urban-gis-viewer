@@ -26,7 +26,7 @@ from streamlit_folium import st_folium
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
-from shadow_calc import calc_shadows, suggest_height_solar, calc_reverse_shadow
+from shadow_calc import calc_shadows, suggest_height_solar, calc_reverse_shadow, calc_volume_from_shadow
 
 _COMPASS_GRID = [
     [("↖ 北西", 315), ("↑ 北",  0),   ("↗ 北東",  45)],
@@ -1327,44 +1327,60 @@ with tab3:
                     f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
                 )
 
-            # ── 逆日影チェック ──
+            # ── 逆日影ボリューム ──
             st.divider()
-            st.subheader("🔄 逆日影チェック")
+            st.subheader("🏗️ 逆日影ボリューム")
             st.caption(
-                "各測定点が **ちょうどN時間日影になる最小建物高さ** を算出します。"
-                "　🔴赤=低H（敏感な点）　🟡黄=中　🟢緑=高H（余裕ある点）"
-                "　※ 4mグリッド・敷地周辺30mの範囲"
+                "フットプリント内の各点で「日影規制を満たす最大建物高さ」を算出し、"
+                "高さ分布を持つ3D建物形状として表示します。"
+                "　🔵青=低（規制厳しい）→ 🟡黄 → 🔴赤=高（余裕あり）"
+                "　※ 2mグリッド（フットプリント内）・各柱独立近似"
             )
 
-            with st.spinner("逆日影計算中（4mグリッド・敷地周辺30m）…"):
-                _rev_res = calc_reverse_shadow(
+            with st.spinner("逆日影ボリューム計算中（2mグリッド）…"):
+                _vol_res = calc_volume_from_shadow(
                     _bldg_fp, _meas_h_m,
                     st.session_state.lat, st.session_state.lon,
                     _bearing, _thresh_h, site_w, site_d,
-                    grid_res=4.0, margin=30.0,
+                    grid_res=2.0, margin=30.0,
                 )
 
-            fig_rev = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
-            for _t in _rev_res["traces"]:
-                fig_rev.add_trace(_t)
-            st.plotly_chart(fig_rev, use_container_width=True)
+            if _vol_res["height_map"]:
+                fig_vol = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
+                for _t in _vol_res["traces"]:
+                    fig_vol.add_trace(_t)
+                # 元の建物（半透明グレー）を重ねて比較
+                fig_vol.update_layout(title="逆日影ボリューム（カラー）vs 当初ボリューム（グレー）")
+                st.plotly_chart(fig_vol, use_container_width=True)
 
-            if _rev_res["min_h"] is not None:
-                _rev_min = _rev_res["min_h"]
-                if _rev_min < vol["est_height"]:
-                    st.error(
-                        f"🔴 最も敏感な測定点の逆日影H = **{_rev_min:.1f}m**。"
-                        f"建物高さ {vol['est_height']:.0f}m はこれを超えているため日影規制に抵触します。"
+                _hm = _vol_res["height_map"]
+                _hvals = list(_hm.values())
+                _h_avg = sum(_hvals) / len(_hvals)
+                _h_min = min(_hvals)
+                _h_max = max(_hvals)
+                col_v1, col_v2, col_v3 = st.columns(3)
+                col_v1.metric("平均許容高さ", f"{_h_avg:.1f}m")
+                col_v2.metric("最も低い点", f"{_h_min:.1f}m")
+                col_v3.metric("最も高い点", f"{_h_max:.1f}m")
+
+                if _h_min < vol["est_height"]:
+                    st.warning(
+                        f"⚠️ フットプリント内の一部（最小 {_h_min:.1f}m）で "
+                        f"日影規制を満たす高さが当初建物高さ {vol['est_height']:.0f}m を下回っています。"
+                        f"カラーマップで青い部分の屋根を下げることで規制に適合させられます。"
                     )
                 else:
                     st.success(
-                        f"✅ 最も敏感な測定点の逆日影H = **{_rev_min:.1f}m**。"
-                        f"建物高さ {vol['est_height']:.0f}m はこの範囲内に収まっています。"
+                        f"✅ フットプリント全域で当初建物高さ {vol['est_height']:.0f}m 以上の高さが確保できます"
+                        f"（最小許容高さ {_h_min:.1f}m）。"
                     )
                 st.caption(
-                    f"逆日影H = {_rev_min:.1f}m とは「この敷地に高さ {_rev_min:.1f}m の建物を建てると、"
-                    f"周辺で最も影響を受ける点がちょうど{_thresh_h}時間日影になる」という意味です。"
+                    "逆日影ボリュームとは: 各フットプリント点を独立した柱と見なし、"
+                    "周辺測定点がちょうど規制時間日影になる最小高さを算出した保守的エンベロープです。"
+                    "実際の設計では連続壁・隣棟の影響を加味した精密計算が必要です。"
                 )
+            else:
+                st.warning("逆日影ボリュームの計算に十分な日影時間がありません（冬至の日照条件を確認してください）。")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
