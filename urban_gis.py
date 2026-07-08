@@ -26,7 +26,7 @@ from streamlit_folium import st_folium
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
-from shadow_calc import calc_shadows, suggest_height_solar
+from shadow_calc import calc_shadows, suggest_height_solar, calc_reverse_shadow
 
 _COMPASS_GRID = [
     [("↖ 北西", 315), ("↑ 北",  0),   ("↗ 北東",  45)],
@@ -1325,6 +1325,45 @@ with tab3:
                 st.success(
                     f"✅ **日影OK**: {_thresh_h}時間日影は敷地内に収まります "
                     f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
+                )
+
+            # ── 逆日影チェック ──
+            st.divider()
+            st.subheader("🔄 逆日影チェック")
+            st.caption(
+                "各測定点が **ちょうどN時間日影になる最小建物高さ** を算出します。"
+                "　🔴赤=低H（敏感な点）　🟡黄=中　🟢緑=高H（余裕ある点）"
+                "　※ 4mグリッド・敷地周辺30mの範囲"
+            )
+
+            with st.spinner("逆日影計算中（4mグリッド・敷地周辺30m）…"):
+                _rev_res = calc_reverse_shadow(
+                    _bldg_fp, _meas_h_m,
+                    st.session_state.lat, st.session_state.lon,
+                    _bearing, _thresh_h, site_w, site_d,
+                    grid_res=4.0, margin=30.0,
+                )
+
+            fig_rev = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
+            for _t in _rev_res["traces"]:
+                fig_rev.add_trace(_t)
+            st.plotly_chart(fig_rev, use_container_width=True)
+
+            if _rev_res["min_h"] is not None:
+                _rev_min = _rev_res["min_h"]
+                if _rev_min < vol["est_height"]:
+                    st.error(
+                        f"🔴 最も敏感な測定点の逆日影H = **{_rev_min:.1f}m**。"
+                        f"建物高さ {vol['est_height']:.0f}m はこれを超えているため日影規制に抵触します。"
+                    )
+                else:
+                    st.success(
+                        f"✅ 最も敏感な測定点の逆日影H = **{_rev_min:.1f}m**。"
+                        f"建物高さ {vol['est_height']:.0f}m はこの範囲内に収まっています。"
+                    )
+                st.caption(
+                    f"逆日影H = {_rev_min:.1f}m とは「この敷地に高さ {_rev_min:.1f}m の建物を建てると、"
+                    f"周辺で最も影響を受ける点がちょうど{_thresh_h}時間日影になる」という意味です。"
                 )
 
 

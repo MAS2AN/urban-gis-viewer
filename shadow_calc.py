@@ -266,6 +266,138 @@ def calc_shadows(
     }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 逆日影計算
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _ray_to_polygon_entry(px, py, dx, dy, polygon):
+    """
+    点(px,py)から方向(dx,dy)へのレイが凸多角形に入る最小距離 t≥0 を返す。
+    交差しなければ None。
+    """
+    min_t = None
+    n = len(polygon)
+    for i in range(n):
+        ax, ay = polygon[i]
+        bx, by = polygon[(i + 1) % n]
+        edx, edy = bx - ax, by - ay
+        denom = dx * edy - dy * edx
+        if abs(denom) < 1e-9:
+            continue
+        t = ((ax - px) * edy - (ay - py) * edx) / denom
+        s = ((ax - px) * dy  - (ay - py) * dx)  / denom
+        if t >= -1e-6 and -1e-6 <= s <= 1.0 + 1e-6:
+            t = max(0.0, t)
+            if min_t is None or t < min_t:
+                min_t = t
+    return min_t
+
+
+def calc_reverse_shadow(
+    bldg_fp: list,
+    meas_h_m: float,
+    lat_deg: float,
+    lon_deg: float,
+    road_bearing_deg: float,
+    threshold_h: float,
+    site_w: float,
+    site_d: float,
+    grid_res: float = 4.0,
+    margin: float = 30.0,
+) -> dict:
+    """
+    逆日影計算: 各測定点P で「ちょうどN時間日影になる建物の最小高さ」を求める。
+
+    通常の日影: 建物高さH → 影の到達範囲
+    逆日影:     測定点P → 「P がN時間影になる最小建物高さ」
+
+    色の意味:
+      赤（低H）= 短い建物でも N時間影になる敏感な点
+      緑（高H）= かなり高くしないとN時間影にならない余裕ある点
+
+    戻り値: {traces, min_h（全測定点中の最小逆日影H）}
+    """
+    import plotly.graph_objects as go
+
+    # 時刻ごとの太陽位置・影方向（プロット座標）を計算
+    times = []
+    t_cur = TIME_START
+    while t_cur <= TIME_END + 1e-9:
+        times.append(t_cur); t_cur += TIME_STEP
+
+    sun_data = []
+    for hr in times:
+        alt_d, az_d = solar_position(hr, lat_deg, lon_deg)
+        if alt_d < 2.0:
+            sun_data.append(None); continue
+        geo_dx = -math.sin(math.radians(az_d))
+        geo_dy = -math.cos(math.radians(az_d))
+        pdx, pdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
+        sun_data.append((math.radians(alt_d), pdx, pdy))
+
+    n_steps_needed = max(1, int(round(threshold_h / TIME_STEP)))
+
+    # グリッド範囲（敷地＋周辺 margin m）
+    x0 = -margin;    x1 = site_w + margin
+    y0 = -margin;    y1 = site_d + margin
+
+    pts_x, pts_y, pts_h = [], [], []
+    min_h = None
+
+    gx = x0
+    while gx <= x1 + 1e-6:
+        gy = y0
+        while gy <= y1 + 1e-6:
+            # 建物フットプリント内は計算対象外
+            if _in_poly(gx, gy, bldg_fp):
+                gy += grid_res; continue
+
+            h_values = []
+            for sd in sun_data:
+                if sd is None: continue
+                alt_r, pdx, pdy = sd
+                # 測定点 P から「太陽方向 (-pdx,-pdy)」にレイを飛ばし建物に当たる距離を求める
+                L = _ray_to_polygon_entry(gx, gy, -pdx, -pdy, bldg_fp)
+                if L is not None and L > 1e-3:
+                    h_values.append(meas_h_m + L * math.tan(alt_r))
+
+            h_values.sort()
+            if len(h_values) >= n_steps_needed:
+                h_rev = h_values[n_steps_needed - 1]
+                if h_rev < 200:  # 非現実的な高さは除外
+                    pts_x.append(gx); pts_y.append(gy); pts_h.append(h_rev)
+                    if min_h is None or h_rev < min_h:
+                        min_h = h_rev
+            gy += grid_res
+        gx += grid_res
+
+    traces = []
+    if pts_h:
+        h_lo = max(0, min(pts_h))
+        h_hi = min(60, max(pts_h))
+        traces.append(go.Scatter3d(
+            x=pts_x, y=pts_y, z=[meas_h_m] * len(pts_x),
+            mode="markers",
+            marker=dict(
+                size=max(3, int(grid_res * 1.8)),
+                color=pts_h,
+                colorscale=[
+                    [0.0,  "#CC2222"],
+                    [0.25, "#E6781E"],
+                    [0.55, "#F5D020"],
+                    [1.0,  "#3CB371"],
+                ],
+                cmin=h_lo, cmax=h_hi,
+                colorbar=dict(title="逆日影H(m)", thickness=14, len=0.55, x=1.02),
+                opacity=0.80,
+            ),
+            name=f"逆日影高さ（{threshold_h}時間）",
+            showlegend=True,
+            hovertemplate="X:%{x:.0f}m Y:%{y:.0f}m<br>逆日影H:%{marker.color:.1f}m<extra></extra>",
+        ))
+
+    return {"traces": traces, "min_h": min_h}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 推奨高さ（バイナリサーチ）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _has_violation(bldg_fp, height_m, meas_h_m, lat, lon, bearing, thresh, site_w, site_d):
