@@ -546,6 +546,7 @@ def _create_volume_3d(
     vol: dict, site_w: float, site_d: float,
     road_width: float | None = None,
     show_shasen: bool = True,
+    show_building: bool = True,
 ) -> go.Figure:
     max_building_area = vol["max_building_area"]
     est_height  = vol["est_height"]
@@ -588,53 +589,58 @@ def _create_volume_3d(
             x=[0, site_w, site_w, 0, 0], y=[0, 0, site_d, site_d, 0], z=[0.05]*5,
             mode="lines", line=dict(color="#8B7355", width=4), name="敷地境界",
         ),
-        go.Mesh3d(
-            x=vx, y=vy, z=vz, i=fi, j=fj, k=fk,
-            color="#5B8C5A", opacity=0.30, name="建物エンベロープ", showlegend=True, hoverinfo="none",
-        ),
         go.Scatter3d(
-            x=wx, y=wy, z=wz,
-            mode="lines", line=dict(color="#2C3E35", width=2),
-            name="建物輪郭", showlegend=False, hoverinfo="none",
-        ),
-        go.Scatter3d(
-            x=[0, site_w], y=[-dim_off, -dim_off], z=[0, 0],
-            mode="lines", line=dict(color="#8B7355", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        go.Scatter3d(
-            x=[x1 + h_off, x1 + h_off], y=[y0, y0], z=[0, h],
-            mode="lines", line=dict(color="#3D5C3C", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        go.Scatter3d(
-            x=[x0, x1], y=[y0 - dim_off * 0.5, y0 - dim_off * 0.5], z=[0, 0],
-            mode="lines", line=dict(color="#5B8C5A", width=2, dash="dot"),
-            showlegend=False, hoverinfo="none",
-        ),
-        go.Scatter3d(
-            x=[site_w / 2,        x1 + h_off * 1.6,  x0 + bldg_w / 2],
-            y=[-dim_off * 1.3,    y0,                 y0 - dim_off * 0.6],
-            z=[0,                 h / 2,              0],
-            mode="text",
-            text=[
-                f"<b>敷地 {site_w:.1f}×{site_d:.1f} m</b>",
-                f"<b>H={h:.1f}m ({est_floors}F)</b>",
-                f"建物 {bldg_w:.1f}×{bldg_d:.1f} m",
-            ],
+            x=[site_w / 2], y=[-dim_off * 1.3], z=[0],
+            mode="text", text=[f"<b>敷地 {site_w:.1f}×{site_d:.1f} m</b>"],
             textfont=dict(color="#2C3E35", size=12),
             showlegend=False, hoverinfo="none",
         ),
     ]
 
-    floor_h = h / est_floors if est_floors > 0 else h
-    for f in range(1, min(est_floors, 30)):
-        fz = f * floor_h
-        traces.append(go.Scatter3d(
-            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], z=[fz]*5,
-            mode="lines", line=dict(color="#7FAF7E", width=1),
-            showlegend=False, hoverinfo="none",
-        ))
+    if show_building:
+        traces += [
+            go.Mesh3d(
+                x=vx, y=vy, z=vz, i=fi, j=fj, k=fk,
+                color="#5B8C5A", opacity=0.30, name="建物エンベロープ", showlegend=True, hoverinfo="none",
+            ),
+            go.Scatter3d(
+                x=wx, y=wy, z=wz,
+                mode="lines", line=dict(color="#2C3E35", width=2),
+                name="建物輪郭", showlegend=False, hoverinfo="none",
+            ),
+            go.Scatter3d(
+                x=[0, site_w], y=[-dim_off, -dim_off], z=[0, 0],
+                mode="lines", line=dict(color="#8B7355", width=2, dash="dot"),
+                showlegend=False, hoverinfo="none",
+            ),
+            go.Scatter3d(
+                x=[x1 + h_off, x1 + h_off], y=[y0, y0], z=[0, h],
+                mode="lines", line=dict(color="#3D5C3C", width=2, dash="dot"),
+                showlegend=False, hoverinfo="none",
+            ),
+            go.Scatter3d(
+                x=[x0, x1], y=[y0 - dim_off * 0.5, y0 - dim_off * 0.5], z=[0, 0],
+                mode="lines", line=dict(color="#5B8C5A", width=2, dash="dot"),
+                showlegend=False, hoverinfo="none",
+            ),
+            go.Scatter3d(
+                x=[x1 + h_off * 1.6, x0 + bldg_w / 2],
+                y=[y0,                y0 - dim_off * 0.6],
+                z=[h / 2,            0],
+                mode="text",
+                text=[f"<b>H={h:.1f}m ({est_floors}F)</b>", f"建物 {bldg_w:.1f}×{bldg_d:.1f} m"],
+                textfont=dict(color="#2C3E35", size=12),
+                showlegend=False, hoverinfo="none",
+            ),
+        ]
+        floor_h = h / est_floors if est_floors > 0 else h
+        for f in range(1, min(est_floors, 30)):
+            fz = f * floor_h
+            traces.append(go.Scatter3d(
+                x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], z=[fz]*5,
+                mode="lines", line=dict(color="#7FAF7E", width=1),
+                showlegend=False, hoverinfo="none",
+            ))
 
     # 斜線制限ラインを追加
     if show_shasen and vol.get("zone_name"):
@@ -1209,25 +1215,8 @@ with tab3:
                 )
 
             st.divider()
-            st.markdown("**📐 建物エンベロープ（3D）**")
-            col_cap, col_chk = st.columns([3, 1])
-            with col_cap:
-                st.caption(
-                    "※敷地を矩形で近似した概算値。前面道路容積率は建基法第52条第2項による。"
-                    "　斜線制限は **前方（手前）を前面道路・後方を北側** と仮定した概略表示です（建基法第56条）。"
-                )
-            with col_chk:
-                show_shasen = st.checkbox("📐 斜線制限ラインを表示", value=True)
-            fig = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=show_shasen)
-            st.plotly_chart(fig, use_container_width=True)
 
-            st.divider()
-            st.subheader("☀️ 等時間日影チェック（冬至日・概算）")
-            st.caption(
-                "建基法第56条の2 に基づく概算計算です（2mグリッド・30分刻み・確認申請レベルではありません）。"
-                f"　前面道路: **{st.session_state.road_bearing_label}側**（コンパスで変更できます）"
-            )
-
+            # ── 測定条件（日影・逆日影共通）──
             _sh_col1, _sh_col2 = st.columns(2)
             with _sh_col1:
                 _meas_h_opt = st.selectbox(
@@ -1256,85 +1245,12 @@ with tab3:
                 (_px0 + _bldg_w, _py0 + _bldg_d), (_px0, _py0 + _bldg_d),
             ]
 
-            with st.spinner("日影計算中（冬至日 8〜16時 / 2mグリッド）…"):
-                _sh_res = calc_shadows(
-                    _bldg_fp, vol["est_height"], _meas_h_m,
-                    st.session_state.lat, st.session_state.lon,
-                    _bearing, _thresh_h, site_w, site_d,
-                )
-
-            # 日影を重ねた3D図
-            fig2 = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
-            for _t in _sh_res["traces"]:
-                fig2.add_trace(_t)
+            # ── 逆日影ボリューム + 斜線制限（メイン 3D）──
+            st.subheader("🏗️ 逆日影ボリューム + 斜線制限（3D）")
             st.caption(
-                f"冬至日 / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
-                "│ 🟠 敷地内  🔴 敷地外逸脱  🔵 全日影ユニオン"
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-
-            if _sh_res["violation"]:
-                st.error(
-                    f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
-                    f"{_thresh_h}時間日影が敷地外へ **{_sh_res['violation_area_m2']:.0f}㎡** 逸脱します。"
-                )
-                with st.spinner("適合高さをバイナリサーチ中…"):
-                    _sug_h = suggest_height_solar(
-                        _bldg_fp, vol["est_height"], _meas_h_m,
-                        st.session_state.lat, st.session_state.lon,
-                        _bearing, _thresh_h, site_w, site_d,
-                    )
-                if _sug_h > 0:
-                    st.info(f"💡 **縮小案: H ≤ {_sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
-
-                    # ── 縮小案モデルの日影チェック ──
-                    st.markdown(f"**📐 縮小案モデル（H={_sug_h:.1f}m）の等時間日影**")
-                    _sug_vol = dict(vol)
-                    _sug_vol["est_height"] = _sug_h
-                    _sug_vol["est_floors"] = max(1, int(math.ceil(_sug_h / vol.get("floor_height", 3.5))))
-
-                    with st.spinner(f"縮小案（H={_sug_h:.1f}m）の日影を計算中…"):
-                        _sug_sh_res = calc_shadows(
-                            _bldg_fp, _sug_h, _meas_h_m,
-                            st.session_state.lat, st.session_state.lon,
-                            _bearing, _thresh_h, site_w, site_d,
-                        )
-
-                    fig3 = _create_volume_3d(_sug_vol, site_w, site_d, road_width=road_w, show_shasen=False)
-                    for _t in _sug_sh_res["traces"]:
-                        fig3.add_trace(_t)
-                    st.caption(
-                        f"縮小案 H={_sug_h:.1f}m / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
-                        "│ 🟠 敷地内  🔴 敷地外逸脱"
-                    )
-                    st.plotly_chart(fig3, use_container_width=True)
-
-                    if _sug_sh_res["violation"]:
-                        st.warning(
-                            f"⚠️ 縮小案でもわずかに逸脱（{_sug_sh_res['violation_area_m2']:.0f}㎡）。"
-                            "グリッド誤差の範囲内のため、詳細検討では専用ソフトで確認してください。"
-                        )
-                    else:
-                        st.success(
-                            f"✅ 縮小案（H={_sug_h:.1f}m）では{_thresh_h}時間日影が敷地内に収まります "
-                            f"（等時間日影面積 {_sug_sh_res['iso_area_m2']:.0f}㎡）"
-                        )
-                else:
-                    st.warning("H=1m でも逸脱するため、用途地域・建物位置の再検討が必要です。")
-            else:
-                st.success(
-                    f"✅ **日影OK**: {_thresh_h}時間日影は敷地内に収まります "
-                    f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
-                )
-
-            # ── 逆日影ボリューム ──
-            st.divider()
-            st.subheader("🏗️ 逆日影ボリューム")
-            st.caption(
-                "フットプリント内の各点で「日影規制を満たす最大建物高さ」を算出し、"
-                "高さ分布を持つ3D建物形状として表示します。"
-                "　🔵青=低（規制厳しい）→ 🟡黄 → 🔴赤=高（余裕あり）"
-                "　※ 2mグリッド（フットプリント内）・各柱独立近似"
+                f"前面道路: **{st.session_state.road_bearing_label}側**（手前=道路・奥=北）　"
+                "🔵青=高さ制限が厳しい（北側）　🔴赤=余裕がある（道路側）　"
+                "| 橙面=道路斜線　赤面=隣地斜線　青面=北側斜線（建基法第56条）"
             )
 
             with st.spinner("逆日影ボリューム計算中（2mグリッド）…"):
@@ -1346,12 +1262,17 @@ with tab3:
                 )
 
             if _vol_res["height_map"]:
-                fig_vol = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
+                fig_main = _create_volume_3d(
+                    vol, site_w, site_d, road_width=road_w,
+                    show_shasen=False, show_building=False,
+                )
                 for _t in _vol_res["traces"]:
-                    fig_vol.add_trace(_t)
-                # 元の建物（半透明グレー）を重ねて比較
-                fig_vol.update_layout(title="逆日影ボリューム（カラー）vs 当初ボリューム（グレー）")
-                st.plotly_chart(fig_vol, use_container_width=True)
+                    fig_main.add_trace(_t)
+                if vol.get("zone_name"):
+                    for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
+                        fig_main.add_trace(_t)
+                fig_main.update_layout(height=530)
+                st.plotly_chart(fig_main, use_container_width=True)
 
                 _hm = _vol_res["height_map"]
                 _hvals = list(_hm.values())
@@ -1360,27 +1281,101 @@ with tab3:
                 _h_max = max(_hvals)
                 col_v1, col_v2, col_v3 = st.columns(3)
                 col_v1.metric("平均許容高さ", f"{_h_avg:.1f}m")
-                col_v2.metric("最も低い点", f"{_h_min:.1f}m")
-                col_v3.metric("最も高い点", f"{_h_max:.1f}m")
+                col_v2.metric("最小許容高さ（北側）", f"{_h_min:.1f}m")
+                col_v3.metric("最大許容高さ（道路側）", f"{_h_max:.1f}m")
 
                 if _h_min < vol["est_height"]:
                     st.warning(
                         f"⚠️ フットプリント内の一部（最小 {_h_min:.1f}m）で "
                         f"日影規制を満たす高さが当初建物高さ {vol['est_height']:.0f}m を下回っています。"
-                        f"カラーマップで青い部分の屋根を下げることで規制に適合させられます。"
+                        "青い部分の屋根を下げることで規制に適合できます。"
                     )
                 else:
                     st.success(
-                        f"✅ フットプリント全域で当初建物高さ {vol['est_height']:.0f}m 以上の高さが確保できます"
+                        f"✅ フットプリント全域で当初建物高さ {vol['est_height']:.0f}m 以上が確保できます"
                         f"（最小許容高さ {_h_min:.1f}m）。"
                     )
                 st.caption(
-                    "逆日影ボリュームとは: 各フットプリント点を独立した柱と見なし、"
-                    "周辺測定点がちょうど規制時間日影になる最小高さを算出した保守的エンベロープです。"
-                    "実際の設計では連続壁・隣棟の影響を加味した精密計算が必要です。"
+                    "逆日影ボリューム: 各フットプリント点の影が敷地境界に届くN番目の時刻から求めた高さ制限エンベロープ。"
+                    "各柱独立計算の保守的近似。実施設計では連続壁・隣棟効果を加味した精密計算が必要です。"
                 )
             else:
-                st.warning("逆日影ボリュームの計算に十分な日影時間がありません（冬至の日照条件を確認してください）。")
+                st.warning("逆日影ボリュームの計算に十分な日照時間がありません（冬至の条件を確認してください）。")
+
+            # ── 等時間日影チェック（詳細・折りたたみ）──
+            st.divider()
+            with st.expander("☀️ 等時間日影チェック（詳細）", expanded=False):
+                st.caption(
+                    "建基法第56条の2 に基づく概算計算（2mグリッド・30分刻み・確認申請レベルではありません）。"
+                )
+
+                with st.spinner("日影計算中（冬至日 8〜16時 / 2mグリッド）…"):
+                    _sh_res = calc_shadows(
+                        _bldg_fp, vol["est_height"], _meas_h_m,
+                        st.session_state.lat, st.session_state.lon,
+                        _bearing, _thresh_h, site_w, site_d,
+                    )
+
+                fig2 = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
+                for _t in _sh_res["traces"]:
+                    fig2.add_trace(_t)
+                st.caption(
+                    f"冬至日 / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
+                    "│ 🟠 敷地内  🔴 敷地外逸脱  🔵 全日影ユニオン"
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+                if _sh_res["violation"]:
+                    st.error(
+                        f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
+                        f"{_thresh_h}時間日影が敷地外へ **{_sh_res['violation_area_m2']:.0f}㎡** 逸脱します。"
+                    )
+                    with st.spinner("適合高さをバイナリサーチ中…"):
+                        _sug_h = suggest_height_solar(
+                            _bldg_fp, vol["est_height"], _meas_h_m,
+                            st.session_state.lat, st.session_state.lon,
+                            _bearing, _thresh_h, site_w, site_d,
+                        )
+                    if _sug_h > 0:
+                        st.info(f"💡 **縮小案: H ≤ {_sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
+                        st.markdown(f"**📐 縮小案モデル（H={_sug_h:.1f}m）の等時間日影**")
+                        _sug_vol = dict(vol)
+                        _sug_vol["est_height"] = _sug_h
+                        _sug_vol["est_floors"] = max(1, int(math.ceil(_sug_h / vol.get("floor_height", 3.5))))
+
+                        with st.spinner(f"縮小案（H={_sug_h:.1f}m）の日影を計算中…"):
+                            _sug_sh_res = calc_shadows(
+                                _bldg_fp, _sug_h, _meas_h_m,
+                                st.session_state.lat, st.session_state.lon,
+                                _bearing, _thresh_h, site_w, site_d,
+                            )
+
+                        fig3 = _create_volume_3d(_sug_vol, site_w, site_d, road_width=road_w, show_shasen=False)
+                        for _t in _sug_sh_res["traces"]:
+                            fig3.add_trace(_t)
+                        st.caption(
+                            f"縮小案 H={_sug_h:.1f}m / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
+                            "│ 🟠 敷地内  🔴 敷地外逸脱"
+                        )
+                        st.plotly_chart(fig3, use_container_width=True)
+
+                        if _sug_sh_res["violation"]:
+                            st.warning(
+                                f"⚠️ 縮小案でもわずかに逸脱（{_sug_sh_res['violation_area_m2']:.0f}㎡）。"
+                                "グリッド誤差の範囲内のため、詳細検討では専用ソフトで確認してください。"
+                            )
+                        else:
+                            st.success(
+                                f"✅ 縮小案（H={_sug_h:.1f}m）では{_thresh_h}時間日影が敷地内に収まります "
+                                f"（等時間日影面積 {_sug_sh_res['iso_area_m2']:.0f}㎡）"
+                            )
+                    else:
+                        st.warning("H=1m でも逸脱するため、用途地域・建物位置の再検討が必要です。")
+                else:
+                    st.success(
+                        f"✅ **日影OK**: {_thresh_h}時間日影は敷地内に収まります "
+                        f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
+                    )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
