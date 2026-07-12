@@ -272,6 +272,35 @@ def calc_shadows(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 逆日影計算
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _clip_fp_to_yband(bldg_fp, y_lo, y_hi):
+    """
+    建物フットプリントと水平帯 y_lo ≤ y ≤ y_hi の交差部分を
+    矩形フットプリント [(x_lo,y_lo),(x_hi,y_lo),(x_hi,y_hi),(x_lo,y_hi)] として返す。
+    交差なし・幅/高さが小さすぎる場合は None。
+    """
+    xs_in_band = []
+    n = len(bldg_fp)
+    for i in range(n):
+        x1, y1 = bldg_fp[i]
+        x2, y2 = bldg_fp[(i + 1) % n]
+        # 帯内にある頂点
+        if y_lo - 1e-9 <= y1 <= y_hi + 1e-9:
+            xs_in_band.append(x1)
+        # 辺と y=y_lo, y=y_hi の交点
+        dy_edge = y2 - y1
+        if abs(dy_edge) > 1e-9:
+            for y_cut in (y_lo, y_hi):
+                t = (y_cut - y1) / dy_edge
+                if -1e-9 <= t <= 1.0 + 1e-9:
+                    xs_in_band.append(x1 + t * (x2 - x1))
+    if len(xs_in_band) < 2:
+        return None
+    x_lo, x_hi = min(xs_in_band), max(xs_in_band)
+    if x_hi - x_lo < 0.5 or y_hi - y_lo < 0.5:
+        return None
+    return [(x_lo, y_lo), (x_hi, y_lo), (x_hi, y_hi), (x_lo, y_hi)]
+
+
 def _ray_to_polygon_entry(px, py, dx, dy, polygon):
     """
     点(px,py)から方向(dx,dy)へのレイが凸多角形に入る最小距離 t≥0 を返す。
@@ -308,88 +337,88 @@ def calc_volume_from_shadow(
     margin: float = 30.0,  # unused (kept for API compatibility)
 ) -> dict:
     """
-    逆日影ボリューム: フットプリント内の各点で「影が敷地境界に届くN番目の最小高さ」を求め
-    高さ分布を持つ3D建物エンベロープとして返す。
+    逆日影ボリューム（スライス×バイナリサーチ方式）
 
-    計算原理: 各フットプリント点(gx,gy)で各時刻に影方向の敷地境界距離d_bndを求め
-    H = meas_h + d_bnd × tan(alt) をソートしてN番目の値を高さ制限とする。
-    北境界に近い点ほど d_bnd が小さく→高さ制限低い(低層化が必要)。
-    南(道路)側ほど d_bnd が大きく→高くできる。
+    【旧版の問題点】
+    - 各グリッド点を独立した「柱」として扱い、「その1点の影が境界まで届く最小高さ」を
+      推定していた。実際の建物は連続した固体であり、建物全体の影を考慮すべき。
+    - 測定点が敷地境界上（正しくは境界外）であった。
+    - 境界距離 d_bnd は直線距離のみで、建物幅方向の影の広がりを無視していた。
+
+    【新アルゴリズム】
+    1. suggest_height_solar で建物全体の均一最大高さ H_uniform を求める（基準値）。
+    2. フットプリントを y 方向 N_BAND 本のスライスに分割。
+    3. 各スライスの矩形フットプリントで suggest_height_solar（内部で calc_shadows）を
+       バイナリサーチ → そのスライス単体の最大許容高さ H_s を決定。
+       「スライス単体」の評価なので建物前面側のスライスは影が遠く → 高さ余裕大、
+       北側（敷地境界寄り）のスライスは影が境界にすぐ届く → 高さ制限厳しい。
+    4. 各グリッドセルに属するスライスの H_s を割り当て → 高さマップを構築。
+    5. 既存の Mesh3d 生成ロジックで 3D バー表示。
+
+    計算回数: H_uniform(12回) + N_BAND×12回 ≈ 72回 の calc_shadows（grid_res=4m）。
 
     Returns: {traces, height_map: {(gx,gy): h_max}}
     """
     import plotly.graph_objects as go
 
-    # 時刻ごとの影方向プリコンピュート
-    sun_data = []
-    t_cur = TIME_START
-    while t_cur <= TIME_END + 1e-9:
-        alt_d, az_d = solar_position(t_cur, lat_deg, lon_deg)
-        if alt_d >= 2.0:
-            geo_dx = -math.sin(math.radians(az_d))
-            geo_dy = -math.cos(math.radians(az_d))
-            pdx, pdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
-            sun_data.append((math.radians(alt_d), pdx, pdy))
-        t_cur += TIME_STEP
+    N_BAND = 5  # y方向スライス数（精度と速度のバランス）
 
-    if not sun_data:
-        return {"traces": [], "height_map": {}}
+    # ── フットプリント BBox ──
+    xs_fp = [p[0] for p in bldg_fp]
+    ys_fp = [p[1] for p in bldg_fp]
+    fp_x0, fp_x1 = min(xs_fp), max(xs_fp)
+    fp_y0, fp_y1 = min(ys_fp), max(ys_fp)
+    band_h = (fp_y1 - fp_y0) / N_BAND if N_BAND > 0 else 1.0
 
-    n_steps_needed = max(1, int(round(threshold_h / TIME_STEP)))
+    # ── Step 1: 建物全体の均一最大高さ H_uniform ──
+    H_uniform = suggest_height_solar(
+        bldg_fp, 60.0, meas_h_m,
+        lat_deg, lon_deg, road_bearing_deg,
+        threshold_h, site_w, site_d,
+    )
+    if H_uniform <= 0:
+        # 60m でも適合不可 → 非常に制約の強い敷地。フォールバック値で継続
+        H_uniform = meas_h_m + 2.0
 
-    # フットプリント bbox
-    xs = [p[0] for p in bldg_fp]; ys = [p[1] for p in bldg_fp]
-    fp_x0, fp_x1 = min(xs), max(xs)
-    fp_y0, fp_y1 = min(ys), max(ys)
+    # ── Step 2: y方向スライスごとにバイナリサーチ ──
+    strip_heights = []
+    for s in range(N_BAND):
+        y_lo = fp_y0 + s * band_h
+        y_hi = fp_y0 + (s + 1) * band_h
 
+        strip_fp = _clip_fp_to_yband(bldg_fp, y_lo, y_hi)
+        if strip_fp is None:
+            # スライスが建物外 → 全体の均一高さで代替
+            strip_heights.append(H_uniform)
+            continue
+
+        h_s = suggest_height_solar(
+            strip_fp, H_uniform, meas_h_m,
+            lat_deg, lon_deg, road_bearing_deg,
+            threshold_h, site_w, site_d,
+        )
+        if h_s <= 0:
+            h_s = meas_h_m + 1.0  # 極端に低い → 最低限に設定
+        strip_heights.append(h_s)
+
+    # ── Step 3: height_map 構築 ──
     height_map = {}
     gx = fp_x0
     while gx <= fp_x1 + 1e-6:
         gy = fp_y0
         while gy <= fp_y1 + 1e-6:
-            if not _in_poly(gx, gy, bldg_fp):
-                gy += grid_res; continue
-
-            h_vals = []
-            for alt_r, sdx, sdy in sun_data:
-                # 各影方向で敷地境界(0..site_w × 0..site_d)までの最短距離を求める
-                # 影方向に沿って最初に当たる境界の t を計算
-                if sdx > 1e-6:
-                    tx = (site_w - gx) / sdx   # 東境界まで
-                elif sdx < -1e-6:
-                    tx = (0.0 - gx) / sdx      # 西境界まで (tx>0)
-                else:
-                    tx = 1e9
-
-                if sdy > 1e-6:
-                    ty = (site_d - gy) / sdy   # 北境界まで
-                elif sdy < -1e-6:
-                    ty = (0.0 - gy) / sdy      # 南境界まで (ty>0)
-                else:
-                    ty = 1e9
-
-                d_bnd = min(tx, ty)
-                if d_bnd > 0.1:
-                    h_vals.append(meas_h_m + d_bnd * math.tan(alt_r))
-
-            h_vals.sort()
-            if len(h_vals) >= n_steps_needed:
-                # N番目に小さいH = N時間後にちょうど境界に影が届く高さ
-                height_map[(gx, gy)] = h_vals[n_steps_needed - 1]
-            elif h_vals:
-                # 境界に届く時間数がN未満 = 規制上かなり余裕 → 最大値をキャップ
-                height_map[(gx, gy)] = min(h_vals[-1] * 1.5, 60.0)
-            else:
-                height_map[(gx, gy)] = 60.0
-
+            if _in_poly(gx, gy, bldg_fp):
+                s_idx = int((gy - fp_y0) / band_h) if band_h > 0 else 0
+                s_idx = max(0, min(s_idx, N_BAND - 1))
+                height_map[(gx, gy)] = strip_heights[s_idx]
             gy += grid_res
         gx += grid_res
 
     if not height_map:
         return {"traces": [], "height_map": {}}
 
-    # ── Mesh3d: 各グリッドセルを直方体バーとして結合 ──
-    s = grid_res / 2 * 0.88   # セル半辺（隙間あり）
+    # ── Step 4: Mesh3d 生成（既存ロジック流用） ──
+    s_cell = grid_res / 2 * 0.88  # セル半辺（隙間あり）
     h_vals_all = list(height_map.values())
     h_lo = max(0.0, min(h_vals_all))
     h_hi = max(h_vals_all)
@@ -400,8 +429,10 @@ def calc_volume_from_shadow(
 
     for (cgx, cgy), h in height_map.items():
         h = max(0.1, h)
-        vx_all.extend([cgx-s, cgx+s, cgx+s, cgx-s, cgx-s, cgx+s, cgx+s, cgx-s])
-        vy_all.extend([cgy-s, cgy-s, cgy+s, cgy+s, cgy-s, cgy-s, cgy+s, cgy+s])
+        vx_all.extend([cgx-s_cell, cgx+s_cell, cgx+s_cell, cgx-s_cell,
+                        cgx-s_cell, cgx+s_cell, cgx+s_cell, cgx-s_cell])
+        vy_all.extend([cgy-s_cell, cgy-s_cell, cgy+s_cell, cgy+s_cell,
+                        cgy-s_cell, cgy-s_cell, cgy+s_cell, cgy+s_cell])
         vz_all.extend([0, 0, 0, 0, h, h, h, h])
         intens_all.extend([h] * 8)
 
