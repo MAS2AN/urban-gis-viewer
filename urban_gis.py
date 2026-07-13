@@ -1294,41 +1294,57 @@ with tab3:
                 (_px0 + _bldg_w, _py0 + _bldg_d), (_px0, _py0 + _bldg_d),
             ]
 
-            # ── 逆日影ボリューム（ADS スタイル：影テント）+ 斜線制限 ──
-            st.subheader("🏗️ 逆日影ボリューム + 斜線制限（3D）")
+            # ── 逆日影ボリューム（ADS スタイル：影テント）──
+            st.subheader("🏗️ 逆日影ボリューム（影テント）")
             st.caption(
-                f"前面道路: **{st.session_state.road_bearing_label}側**（手前=道路・奥=北）　"
-                "影テント: 🟣朝（青紫）→ 昼（マゼンタ）→ 夕（黄）　"
-                "各時刻の影が届く斜面パネルの集合（ADS 同方式）　"
-                "| 橙面=道路斜線　赤面=隣地斜線　青面=北側斜線（建基法第56条）"
+                f"前面道路: **{st.session_state.road_bearing_label}側**  "
+                f"建物高さ: **{vol['est_height']:.0f} m**  測定面: **{_meas_h_m} m**　"
+                "🟠朝(8h)橙 → マゼンタ → 🟡夕(16h)黄緑　各時刻の影が到達する斜面パネル集合"
             )
 
-            with st.spinner("影テント（逆日影ボリューム）計算中…"):
+            with st.spinner("影テント計算中…"):
                 _tent_res = calc_shadow_tent(
                     _bldg_fp, vol["est_height"], _meas_h_m,
                     st.session_state.lat, st.session_state.lon,
                     _bearing, site_w, site_d,
                 )
 
-            # 建物ボックス（半透明グレー）+ 影テントパネル + 斜線制限
+            # 建物ボックス（グレー）+ 影テントパネルのみ（斜線制限なし）
             fig_main = _create_volume_3d(
                 vol, site_w, site_d, road_width=road_w,
                 show_shasen=False, show_building=True,
             )
             for _t in _tent_res["traces"]:
                 fig_main.add_trace(_t)
-            if vol.get("zone_name"):
-                for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
-                    fig_main.add_trace(_t)
-            fig_main.update_layout(height=560)
+            fig_main.update_layout(
+                height=580,
+                scene=dict(
+                    aspectmode="data",
+                    xaxis_title="幅(m)",
+                    yaxis_title="奥行(m)  ←道路",
+                    zaxis_title="高さ(m)",
+                ),
+            )
             st.plotly_chart(fig_main, use_container_width=True)
 
             st.caption(
-                f"影テント: 各時刻の太陽方向に対して建物外周エッジ（H={vol['est_height']:.0f}m）から"
-                f"測定面（h={_meas_h_m}m）まで延びる斜面パネルの集合。"
-                "テントの外に建物が出ると、その時刻の影が敷地外へ届く。"
-                "斜線制限面との交差を確認することで規制適合の概略判断が可能。"
+                f"影テント: 各時刻の太陽方向に対して建物エッジ（H={vol['est_height']:.0f}m）"
+                f"から測定面（h={_meas_h_m}m）まで延びる斜面パネルの集合。"
+                "パネルが敷地境界を超えると、その時刻の影が隣地へ届く。"
             )
+
+            # 斜線制限は折りたたみで表示
+            with st.expander("📐 斜線制限エンベロープ（3D）", expanded=False):
+                if vol.get("zone_name"):
+                    fig_sh = _create_volume_3d(
+                        vol, site_w, site_d, road_width=road_w,
+                        show_shasen=False, show_building=True,
+                    )
+                    for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
+                        fig_sh.add_trace(_t)
+                    fig_sh.update_layout(height=480)
+                    st.plotly_chart(fig_sh, use_container_width=True)
+                    st.caption("橙=道路斜線 | 赤=隣地斜線 | 青=北側斜線（建基法第56条）")
 
             # フットプリント内高さマップ（折りたたみ）
             with st.expander("📊 フットプリント内 許容高さマップ（y方向スライス別）", expanded=False):
