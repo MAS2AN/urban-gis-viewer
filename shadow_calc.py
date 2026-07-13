@@ -1,6 +1,6 @@
 """
 等時間日影・斜線制限・逆日影・逆日影ボリューム 計算モジュール（Streamlit Web UI 用）
-updated: 2026-07-13b  # calc_shadow_tent メッシュ・配色・両面描画改善
+updated: 2026-07-13c  # calc_shadow_tent 規制別色分け・CW法線バグ修正
 
 外部ライブラリ: math のみ（Plotly は呼び出し側でインポート）
 計算条件: 冬至日(12/21) / JST 真太陽時補正 / 30分刻み / 2mグリッド
@@ -469,134 +469,156 @@ def calc_shadow_tent(
     road_bearing_deg: float,
     site_w: float,
     site_d: float,
+    zone_name: str = "",
+    road_width: float = 0.0,
+    abs_height_limit: float = 0.0,
 ) -> dict:
     """
-    ADS スタイル逆日影ボリューム（影テント表示）
+    ADS スタイル影テント（規制種別ごとに色分け）
 
-    各時刻の太陽方向に対して、建物外周エッジの上端(H)から
-    影の先端(測定面高さ meas_h)までを繋ぐ「斜面パネル」を生成し、
-    全パネルの集合として影の3D包絡面（テント形状）を返す。
+    各高さ規制が許容する最大建物高さで建てたとき、冬至日に落とす
+    影の包絡面を規制ごとの色で描画する。
 
-    生活産業研究所 ADS のボリューム表示と同じ計算原理:
-      各辺のうち影方向を「向いている」辺のみパネルを作る。
-      パネル = 矩形 (p1→p2 上端H) ×(影先端 L = (H-meas_h)/tan(alt))
-      格子分割してメッシュ密度を高め、両面描画で視点依存消失を防ぐ。
+    色分け（ADS 準拠）:
+      🟣 日影規制（逆日影推定高さ）  #CC00CC  マゼンタ
+      🟠 道路斜線制限               #FF6600  橙
+      🔴 隣地斜線制限               #CC0000  赤
+      🔵 北側斜線制限               #0044DD  青
+      🟢 絶対高さ制限               #008800  緑
 
-    Returns: {traces: [go.Mesh3d ...], n_steps: int}
+    バグ修正: フットプリントが CW 巻き（→ 法線が内向き）のため
+    条件を反転（内積 < 0 の辺 = 真の外向き辺 = 影方向を向く辺）
+
+    Returns: {traces: [go.Mesh3d ...], regulations: dict}
     """
     import plotly.graph_objects as go
 
-    # ADS配色: 朝(8h)=橙 → 昼(12h)=マゼンタ → 夕(16h)=黄緑
-    _COLOR_STOPS = [
-        (0.00, (255, 140,   0)),
-        (0.50, (255,   0, 200)),
-        (1.00, (160, 220,   0)),
-    ]
+    N_EDGE = 6
+    N_SHAD = 8
+    MAX_L  = 80.0
 
-    def _step_color(t_hr):
-        ratio = (t_hr - TIME_START) / max(TIME_END - TIME_START, 1e-6)
-        ratio = max(0.0, min(1.0, ratio))
-        for k in range(len(_COLOR_STOPS) - 1):
-            r0, c0 = _COLOR_STOPS[k]
-            r1, c1 = _COLOR_STOPS[k + 1]
-            if ratio <= r1 + 1e-9:
-                frac = (ratio - r0) / max(r1 - r0, 1e-9)
-                r = int(c0[0] + frac * (c1[0] - c0[0]))
-                g = int(c0[1] + frac * (c1[1] - c0[1]))
-                b = int(c0[2] + frac * (c1[2] - c0[2]))
-                return f"rgb({r},{g},{b})"
-        c = _COLOR_STOPS[-1][1]
-        return f"rgb({c[0]},{c[1]},{c[2]})"
+    # ── 各規制の許容高さを計算 ──
+    cx = sum(p[0] for p in bldg_fp) / len(bldg_fp)
+    cy = sum(p[1] for p in bldg_fp) / len(bldg_fp)
 
-    N_EDGE = 6    # エッジ方向分割数（ADS メッシュ密度）
-    N_SHAD = 8    # 影方向分割数
-    MAX_L  = 80.0 # 最大影長さ上限(m)
+    regulations = {}  # {"規制名": (height_m, color, opacity)}
 
+    # 日影規制（逆日影推定高さ）
+    if height_m > meas_h_m:
+        regulations["日影規制"] = (height_m, "#CC00CC", 0.50)
+
+    # 道路斜線制限
+    if road_width > 0 and zone_name:
+        sf = ROAD_SLOPE.get(zone_name, 0.0)
+        if sf > 0:
+            H_road = (road_width + cy) * sf
+            if H_road > meas_h_m:
+                regulations["道路斜線制限"] = (H_road, "#FF6600", 0.42)
+
+    # 北側斜線制限
+    north_rise = NORTH_RISE.get(zone_name, 0)
+    if north_rise > 0:
+        H_north = north_rise + (site_d - cy) * 1.25
+        if H_north > meas_h_m:
+            regulations["北側斜線制限"] = (H_north, "#0044DD", 0.42)
+
+    # 隣地斜線制限（低層住居専用・田園住居は不適用）
+    _ADJ_RESIDENTIAL = {
+        "第一種中高層住居専用地域", "第二種中高層住居専用地域",
+        "第一種住居地域", "第二種住居地域", "準住居地域",
+    }
+    _ADJ_COMMERCIAL = {
+        "近隣商業地域", "商業地域", "準工業地域", "工業地域", "工業専用地域",
+    }
+    _ADJ_EXCLUDED = {
+        "第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域",
+    }
+    if zone_name and zone_name not in _ADJ_EXCLUDED:
+        is_res = zone_name in _ADJ_RESIDENTIAL
+        base_h = 20.0 if is_res else 31.0
+        adj_sf = 1.25 if is_res else 2.5
+        min_d = min(cx, site_w - cx, cy, site_d - cy)
+        H_adj = base_h + min_d * adj_sf
+        if H_adj > meas_h_m:
+            regulations["隣地斜線制限"] = (H_adj, "#CC0000", 0.38)
+
+    # 絶対高さ制限
+    if abs_height_limit > meas_h_m:
+        regulations["絶対高さ制限"] = (abs_height_limit, "#008800", 0.45)
+
+    # 規制が一つも無い場合は日影規制のみ
+    if not regulations:
+        regulations["日影規制"] = (height_m, "#CC00CC", 0.50)
+
+    # ── 規制ごとにパネル集合を生成 ──
     traces = []
-    n_steps = 0
+    rows_n = N_SHAD + 1
+    cols_n = N_EDGE + 1
+    n_verts = len(bldg_fp)
 
-    t = TIME_START
-    while t <= TIME_END + 1e-9:
-        alt_d, az_d = solar_position(t, lat_deg, lon_deg)
-        if alt_d >= 1.5:
-            geo_dx = -math.sin(math.radians(az_d))
-            geo_dy = -math.cos(math.radians(az_d))
-            sdx, sdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
-            tan_alt = math.tan(math.radians(alt_d))
+    for reg_name, (H, color, opacity) in regulations.items():
+        all_xs, all_ys, all_zs = [], [], []
+        all_ii, all_jj, all_kk = [], [], []
+        v_off = 0
 
-            if tan_alt < 1e-6:
-                t += TIME_STEP; continue
+        t = TIME_START
+        while t <= TIME_END + 1e-9:
+            alt_d, az_d = solar_position(t, lat_deg, lon_deg)
+            if alt_d >= 1.5:
+                geo_dx = -math.sin(math.radians(az_d))
+                geo_dy = -math.cos(math.radians(az_d))
+                sdx, sdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
+                tan_alt = math.tan(math.radians(alt_d))
 
-            L = min((height_m - meas_h_m) / tan_alt, MAX_L)
-            if L < 0.5:
-                t += TIME_STEP; continue
+                if tan_alt >= 1e-6:
+                    L = min((H - meas_h_m) / tan_alt, MAX_L)
+                    if L >= 0.5:
+                        for ei in range(n_verts):
+                            p1x, p1y = bldg_fp[ei]
+                            p2x, p2y = bldg_fp[(ei + 1) % n_verts]
 
-            color = _step_color(t)
-            n_verts = len(bldg_fp)
+                            # CW 巻き補正: 計算法線は内向き → 内積 < 0 の辺が真の外向き辺
+                            nx, ny = -(p2y - p1y), (p2x - p1x)
+                            if nx * sdx + ny * sdy >= 0:
+                                continue  # 影方向を向いていない辺はスキップ
 
-            for ei in range(n_verts):
-                p1x, p1y = bldg_fp[ei]
-                p2x, p2y = bldg_fp[(ei + 1) % n_verts]
+                            for ci in range(cols_n):
+                                u = ci / N_EDGE
+                                ex = p1x + u * (p2x - p1x)
+                                ey = p1y + u * (p2y - p1y)
+                                for ri in range(rows_n):
+                                    v = ri / N_SHAD
+                                    all_xs.append(ex + v * L * sdx)
+                                    all_ys.append(ey + v * L * sdy)
+                                    all_zs.append(H - v * (H - meas_h_m))
 
-                # 影方向を向いている辺のみ（外向き法線との内積 > 0）
-                nx, ny = -(p2y - p1y), (p2x - p1x)
-                if nx * sdx + ny * sdy <= 0:
-                    continue
+                            for ci in range(N_EDGE):
+                                for ri in range(N_SHAD):
+                                    tl = v_off + ci * rows_n + ri
+                                    tr = tl + 1
+                                    bl = v_off + (ci + 1) * rows_n + ri
+                                    br = bl + 1
+                                    # 表裏両面
+                                    all_ii += [tl, tl, tl, tl]
+                                    all_jj += [tr, br, br, bl]
+                                    all_kk += [br, bl, tr, br]
+                            v_off += cols_n * rows_n
+            t += TIME_STEP
 
-                # 格子メッシュ生成: (N_EDGE+1) × (N_SHAD+1) 頂点
-                cols = N_EDGE + 1
-                rows = N_SHAD + 1
-                xs, ys, zs = [], [], []
-                for ci in range(cols):
-                    u = ci / N_EDGE
-                    ex = p1x + u * (p2x - p1x)
-                    ey = p1y + u * (p2y - p1y)
-                    for ri in range(rows):
-                        v = ri / N_SHAD
-                        xs.append(ex + v * L * sdx)
-                        ys.append(ey + v * L * sdy)
-                        zs.append(height_m - v * (height_m - meas_h_m))
+        if all_xs:
+            traces.append(go.Mesh3d(
+                x=all_xs, y=all_ys, z=all_zs,
+                i=all_ii, j=all_jj, k=all_kk,
+                color=color,
+                opacity=opacity,
+                flatshading=True,
+                lighting=dict(diffuse=0.4, ambient=0.8, specular=0.0),
+                name=f"{reg_name}（H={H:.0f}m）",
+                showlegend=True,
+                hovertemplate=f"{reg_name}  H={H:.1f}m<extra></extra>",
+            ))
 
-                # 三角形インデックス（表裏両面）
-                ii, jj, kk = [], [], []
-                for ci in range(N_EDGE):
-                    for ri in range(N_SHAD):
-                        tl = ci * rows + ri
-                        tr = tl + 1
-                        bl = (ci + 1) * rows + ri
-                        br = bl + 1
-                        # 表面
-                        ii += [tl, tl]; jj += [tr, br]; kk += [br, bl]
-                        # 裏面（法線逆転）
-                        ii += [tl, tl]; jj += [br, bl]; kk += [tr, br]
-
-                traces.append(go.Mesh3d(
-                    x=xs, y=ys, z=zs,
-                    i=ii, j=jj, k=kk,
-                    color=color,
-                    opacity=0.50,
-                    flatshading=True,
-                    lighting=dict(diffuse=0.4, ambient=0.8, specular=0.0),
-                    showlegend=False,
-                    hovertemplate=(
-                        f"{t:.1f}h  太陽高度{alt_d:.1f}°  影長{L:.0f}m"
-                        "<extra></extra>"
-                    ),
-                ))
-            n_steps += 1
-        t += TIME_STEP
-
-    # 凡例ダミー
-    for label, t_hr in [("朝(8:00)  橙", 8.0), ("昼(12:00) マゼンタ", 12.0), ("夕(16:00) 黄緑", 16.0)]:
-        traces.append(go.Scatter3d(
-            x=[None], y=[None], z=[None],
-            mode="markers",
-            marker=dict(size=9, color=_step_color(t_hr), symbol="square"),
-            name=label,
-            showlegend=True,
-        ))
-
-    return {"traces": traces, "n_steps": n_steps}
+    return {"traces": traces, "regulations": {k: v[0] for k, v in regulations.items()}}
 
 
 def calc_reverse_shadow(

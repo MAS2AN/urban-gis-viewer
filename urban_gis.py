@@ -1297,9 +1297,9 @@ with tab3:
             # ── 逆日影ボリューム（ADS スタイル：影テント）──
             st.subheader("🏗️ 逆日影ボリューム（影テント）")
             st.caption(
-                f"前面道路: **{st.session_state.road_bearing_label}側**  "
-                f"建物高さ: **{vol['est_height']:.0f} m**  測定面: **{_meas_h_m} m**　"
-                "🟠朝(8h)橙 → マゼンタ → 🟡夕(16h)黄緑　各時刻の影が到達する斜面パネル集合"
+                f"前面道路: **{st.session_state.road_bearing_label}側**　"
+                "色 = 規制種別: 🟣日影規制  🟠道路斜線  🔴隣地斜線  🔵北側斜線  🟢絶対高さ　"
+                "各規制の許容高さで建てたときの冬至日影の包絡面"
             )
 
             with st.spinner("影テント計算中…"):
@@ -1307,6 +1307,9 @@ with tab3:
                     _bldg_fp, vol["est_height"], _meas_h_m,
                     st.session_state.lat, st.session_state.lon,
                     _bearing, site_w, site_d,
+                    zone_name=vol.get("zone_name", ""),
+                    road_width=road_w or 0.0,
+                    abs_height_limit=float(vol.get("abs_height_limit", 0) or 0),
                 )
 
             # 建物ボックス（グレー）+ 影テントパネルのみ（斜線制限なし）
