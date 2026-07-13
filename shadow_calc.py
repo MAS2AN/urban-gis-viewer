@@ -1,6 +1,6 @@
 """
 等時間日影・斜線制限・逆日影・逆日影ボリューム 計算モジュール（Streamlit Web UI 用）
-updated: 2026-07-13  # calc_shadow_tent 追加
+updated: 2026-07-13b  # calc_shadow_tent メッシュ・配色・両面描画改善
 
 外部ライブラリ: math のみ（Plotly は呼び出し側でインポート）
 計算条件: 冬至日(12/21) / JST 真太陽時補正 / 30分刻み / 2mグリッド
@@ -480,17 +480,37 @@ def calc_shadow_tent(
     生活産業研究所 ADS のボリューム表示と同じ計算原理:
       各辺のうち影方向を「向いている」辺のみパネルを作る。
       パネル = 矩形 (p1→p2 上端H) ×(影先端 L = (H-meas_h)/tan(alt))
+      格子分割してメッシュ密度を高め、両面描画で視点依存消失を防ぐ。
 
     Returns: {traces: [go.Mesh3d ...], n_steps: int}
     """
     import plotly.graph_objects as go
 
+    # ADS配色: 朝(8h)=橙 → 昼(12h)=マゼンタ → 夕(16h)=黄緑
+    _COLOR_STOPS = [
+        (0.00, (255, 140,   0)),
+        (0.50, (255,   0, 200)),
+        (1.00, (160, 220,   0)),
+    ]
+
     def _step_color(t_hr):
-        """8:00=青紫 → 12:00=マゼンタ → 16:00=黄。ADS 配色に近い虹グラデーション。"""
         ratio = (t_hr - TIME_START) / max(TIME_END - TIME_START, 1e-6)
-        # HSL: 270°(青紫) → 0°/360°(赤) → 60°(黄) を ratio 0→1 で変化
-        hue = int((1.0 - ratio) * 270)
-        return f"hsl({hue},90%,60%)"
+        ratio = max(0.0, min(1.0, ratio))
+        for k in range(len(_COLOR_STOPS) - 1):
+            r0, c0 = _COLOR_STOPS[k]
+            r1, c1 = _COLOR_STOPS[k + 1]
+            if ratio <= r1 + 1e-9:
+                frac = (ratio - r0) / max(r1 - r0, 1e-9)
+                r = int(c0[0] + frac * (c1[0] - c0[0]))
+                g = int(c0[1] + frac * (c1[1] - c0[1]))
+                b = int(c0[2] + frac * (c1[2] - c0[2]))
+                return f"rgb({r},{g},{b})"
+        c = _COLOR_STOPS[-1][1]
+        return f"rgb({c[0]},{c[1]},{c[2]})"
+
+    N_EDGE = 6    # エッジ方向分割数（ADS メッシュ密度）
+    N_SHAD = 8    # 影方向分割数
+    MAX_L  = 80.0 # 最大影長さ上限(m)
 
     traces = []
     n_steps = 0
@@ -498,64 +518,83 @@ def calc_shadow_tent(
     t = TIME_START
     while t <= TIME_END + 1e-9:
         alt_d, az_d = solar_position(t, lat_deg, lon_deg)
-        if alt_d >= 2.0:
+        if alt_d >= 1.5:
             geo_dx = -math.sin(math.radians(az_d))
             geo_dy = -math.cos(math.radians(az_d))
             sdx, sdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
-            alt_r = math.radians(alt_d)
-            tan_alt = math.tan(alt_r)
+            tan_alt = math.tan(math.radians(alt_d))
 
             if tan_alt < 1e-6:
                 t += TIME_STEP; continue
 
-            L = (height_m - meas_h_m) / tan_alt  # 影の長さ（m）
-            if L < 0.1:
+            L = min((height_m - meas_h_m) / tan_alt, MAX_L)
+            if L < 0.5:
                 t += TIME_STEP; continue
 
             color = _step_color(t)
             n_verts = len(bldg_fp)
 
-            for i in range(n_verts):
-                p1x, p1y = bldg_fp[i]
-                p2x, p2y = bldg_fp[(i + 1) % n_verts]
+            for ei in range(n_verts):
+                p1x, p1y = bldg_fp[ei]
+                p2x, p2y = bldg_fp[(ei + 1) % n_verts]
 
-                # 辺の外向き法線（辺を左→右で見たとき右手が外）
+                # 影方向を向いている辺のみ（外向き法線との内積 > 0）
                 nx, ny = -(p2y - p1y), (p2x - p1x)
-                # 影方向と法線の内積 > 0 → この辺は影の外側を向く → パネル生成
                 if nx * sdx + ny * sdy <= 0:
                     continue
 
-                # パネル4頂点: 建物エッジ上端2点 + 影先端2点
-                xs = [p1x, p2x, p2x + L * sdx, p1x + L * sdx]
-                ys = [p1y, p2y, p2y + L * sdy, p1y + L * sdy]
-                zs = [height_m, height_m, meas_h_m, meas_h_m]
+                # 格子メッシュ生成: (N_EDGE+1) × (N_SHAD+1) 頂点
+                cols = N_EDGE + 1
+                rows = N_SHAD + 1
+                xs, ys, zs = [], [], []
+                for ci in range(cols):
+                    u = ci / N_EDGE
+                    ex = p1x + u * (p2x - p1x)
+                    ey = p1y + u * (p2y - p1y)
+                    for ri in range(rows):
+                        v = ri / N_SHAD
+                        xs.append(ex + v * L * sdx)
+                        ys.append(ey + v * L * sdy)
+                        zs.append(height_m - v * (height_m - meas_h_m))
+
+                # 三角形インデックス（表裏両面）
+                ii, jj, kk = [], [], []
+                for ci in range(N_EDGE):
+                    for ri in range(N_SHAD):
+                        tl = ci * rows + ri
+                        tr = tl + 1
+                        bl = (ci + 1) * rows + ri
+                        br = bl + 1
+                        # 表面
+                        ii += [tl, tl]; jj += [tr, br]; kk += [br, bl]
+                        # 裏面（法線逆転）
+                        ii += [tl, tl]; jj += [br, bl]; kk += [tr, br]
 
                 traces.append(go.Mesh3d(
                     x=xs, y=ys, z=zs,
-                    i=[0, 0], j=[1, 2], k=[2, 3],
+                    i=ii, j=jj, k=kk,
                     color=color,
-                    opacity=0.28,
+                    opacity=0.50,
+                    flatshading=True,
+                    lighting=dict(diffuse=0.4, ambient=0.8, specular=0.0),
                     showlegend=False,
                     hovertemplate=(
-                        f"{t:.1f}h: 影長 {L:.1f}m"
-                        f"<br>太陽高度 {alt_d:.1f}°"
+                        f"{t:.1f}h  太陽高度{alt_d:.1f}°  影長{L:.0f}m"
                         "<extra></extra>"
                     ),
                 ))
             n_steps += 1
         t += TIME_STEP
 
-    # 凡例用ダミートレース
-    traces.append(go.Scatter3d(
-        x=[None], y=[None], z=[None],
-        mode="markers",
-        marker=dict(
-            color=["hsl(270,90%,60%)", "hsl(135,90%,60%)", "hsl(60,90%,60%)"],
-            size=8, symbol="square",
-        ),
-        name=f"影包絡面（{n_steps}時刻 各30分）",
-        showlegend=True,
-    ))
+    # 凡例ダミー
+    for label, t_hr in [("朝(8:00)  橙", 8.0), ("昼(12:00) マゼンタ", 12.0), ("夕(16:00) 黄緑", 16.0)]:
+        traces.append(go.Scatter3d(
+            x=[None], y=[None], z=[None],
+            mode="markers",
+            marker=dict(size=9, color=_step_color(t_hr), symbol="square"),
+            name=label,
+            showlegend=True,
+        ))
 
     return {"traces": traces, "n_steps": n_steps}
 
