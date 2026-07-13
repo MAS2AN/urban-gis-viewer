@@ -800,6 +800,15 @@ with st.form("search_form"):
         placeholder="例）東京都千代田区丸の内1-1-1　または　〒292-0007 千葉県木更津市中島2627-1",
         help="番地まで入力するほど座標精度が上がります。郵便番号は無視されます。",
     )
+    with st.expander("📍 緯度・経度を直接入力（住所検索できない場合の代替）"):
+        col_lat, col_lon = st.columns(2)
+        lat_direct = col_lat.number_input(
+            "緯度", min_value=20.0, max_value=50.0, value=0.0, step=0.000001, format="%.6f",
+            help="Google マップで右クリック→「この場所について」で確認できます",
+        )
+        lon_direct = col_lon.number_input(
+            "経度", min_value=120.0, max_value=155.0, value=0.0, step=0.000001, format="%.6f",
+        )
     with st.expander("🏗️ ボリューム検討（任意）— 入力するとボリューム検討タブで 3D 表示できます"):
         col_w, col_d, col_r = st.columns(3)
         site_w_in = col_w.number_input(
@@ -815,31 +824,66 @@ with st.form("search_form"):
         )
     submitted = st.form_submit_button("🔍 検索", use_container_width=True, type="primary")
 
-if submitted and address_input.strip():
-    clean = re.sub(r"[〒\s]*\d{3}-\d{4}\s*", "", address_input).strip()
-    with st.spinner("検索中…"):
+if submitted:
+    _use_direct = lat_direct != 0.0 and lon_direct != 0.0
+    _has_address = address_input.strip()
+
+    if _use_direct:
+        # 緯度・経度直接入力モード
+        import unicodedata as _ud
+        from analyze_site import REVERSE_GEOCODER_URL as _RGU
+        _muni = ""
         try:
-            geo = geocode(clean)  # analyze_site.geocode() → muniCode キーを返す
-            st.session_state.geo     = geo
-            st.session_state.lat     = geo["lat"]
-            st.session_state.lon     = geo["lon"]
-            st.session_state.address = geo["normalized"]
-            st.session_state.processed_click = None
-            st.session_state.zone_info = None
-            st.session_state.report    = None
-            st.session_state.site_w    = site_w_in
-            st.session_state.site_d    = site_d_in
-            st.session_state.road_w    = road_w_in
-            if api_key:
-                st.session_state.info = fetch_planning_info(geo["lat"], geo["lon"], api_key)
-            else:
-                st.session_state.info = {}
-        except ValueError as e:
-            st.error(f"住所が見つかりませんでした: {e}")
-        except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
-elif submitted:
-    st.warning("住所を入力してください。")
+            _rv = requests.get(_RGU, params={"lat": lat_direct, "lon": lon_direct}, timeout=10)
+            _muni = _rv.json().get("results", {}).get("muniCd", "")
+        except Exception:
+            pass
+        geo = {"lat": lat_direct, "lon": lon_direct,
+               "normalized": f"{lat_direct:.6f}, {lon_direct:.6f}",
+               "muniCode": _muni}
+        st.session_state.geo     = geo
+        st.session_state.lat     = geo["lat"]
+        st.session_state.lon     = geo["lon"]
+        st.session_state.address = geo["normalized"]
+        st.session_state.processed_click = None
+        st.session_state.zone_info = None
+        st.session_state.report    = None
+        st.session_state.site_w    = site_w_in
+        st.session_state.site_d    = site_d_in
+        st.session_state.road_w    = road_w_in
+        if api_key:
+            st.session_state.info = fetch_planning_info(geo["lat"], geo["lon"], api_key)
+        else:
+            st.session_state.info = {}
+        st.info(f"📍 緯度・経度で設定しました: {lat_direct:.6f}, {lon_direct:.6f}")
+
+    elif _has_address:
+        clean = re.sub(r"[〒\s]*\d{3}-\d{4}\s*", "", address_input).strip()
+        with st.spinner("検索中…"):
+            try:
+                geo = geocode(clean)
+                st.session_state.geo     = geo
+                st.session_state.lat     = geo["lat"]
+                st.session_state.lon     = geo["lon"]
+                st.session_state.address = geo["normalized"]
+                st.session_state.processed_click = None
+                st.session_state.zone_info = None
+                st.session_state.report    = None
+                st.session_state.site_w    = site_w_in
+                st.session_state.site_d    = site_d_in
+                st.session_state.road_w    = road_w_in
+                if api_key:
+                    st.session_state.info = fetch_planning_info(geo["lat"], geo["lon"], api_key)
+                else:
+                    st.session_state.info = {}
+            except ValueError as e:
+                st.error(f"住所が見つかりませんでした: {e}")
+                st.info("💡 「緯度・経度を直接入力」欄を展開して座標を入力すると検索できます。\n"
+                        "Google マップで物件を右クリック→「この場所について」で緯度・経度を確認できます。")
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
+    else:
+        st.warning("住所または緯度・経度を入力してください。")
 
 # ────────────────────────────────────────────────
 # タブ
