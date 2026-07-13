@@ -559,19 +559,47 @@ def research_reinfolib(lat: float, lon: float, api_key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def geocode(address: str) -> dict:
-    resp = requests.get(GEOCODER_URL, params={"q": address}, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data:
-        raise ValueError(f"住所が見つかりません: {address}")
-    result = data[0]
-    coords = result["geometry"]["coordinates"]
-    props = result["properties"]
-    lat = float(coords[1])
-    lon = float(coords[0])
+    lat = lon = None
+    normalized = address
+    muni_code = ""
 
-    # 逆ジオコーダーで市区町村コードを取得
-    muni_code = props.get("muniCode", "")
+    # ── 1st: 国土地理院 ──
+    try:
+        resp = requests.get(GEOCODER_URL, params={"q": address}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            coords = data[0]["geometry"]["coordinates"]
+            props  = data[0]["properties"]
+            lat, lon = float(coords[1]), float(coords[0])
+            normalized = props.get("title", address)
+            muni_code  = props.get("muniCode", "")
+    except Exception:
+        pass  # → フォールバックへ
+
+    # ── 2nd: Nominatim (OSM) フォールバック ──
+    if lat is None:
+        try:
+            nom_url = "https://nominatim.openstreetmap.org/search"
+            nom_resp = requests.get(
+                nom_url,
+                params={"q": address, "format": "json", "countrycodes": "jp", "limit": 1},
+                headers={"User-Agent": "urban-gis-viewer/1.0"},
+                timeout=15,
+            )
+            nom_resp.raise_for_status()
+            nom_data = nom_resp.json()
+            if not nom_data:
+                raise ValueError(f"住所が見つかりません: {address}")
+            lat = float(nom_data[0]["lat"])
+            lon = float(nom_data[0]["lon"])
+            normalized = nom_data[0].get("display_name", address)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"ジオコーディング失敗（国土地理院・OSM ともに応答なし）: {address}") from e
+
+    # ── 逆ジオコーダーで市区町村コードを取得 ──
     if not muni_code:
         try:
             rev = requests.get(
@@ -587,7 +615,7 @@ def geocode(address: str) -> dict:
     return {
         "lat": lat,
         "lon": lon,
-        "normalized": props.get("title", address),
+        "normalized": normalized,
         "muniCode": muni_code,
     }
 
