@@ -802,13 +802,18 @@ with st.form("search_form"):
     )
     with st.expander("📍 緯度・経度を直接入力（住所検索できない場合の代替）"):
         col_lat, col_lon = st.columns(2)
-        lat_direct = col_lat.number_input(
-            "緯度", min_value=20.0, max_value=50.0, value=0.0, step=0.000001, format="%.6f",
+        lat_direct_str = col_lat.text_input(
+            "緯度", value="", placeholder="例）35.641234",
             help="Google マップで右クリック→「この場所について」で確認できます",
         )
-        lon_direct = col_lon.number_input(
-            "経度", min_value=120.0, max_value=155.0, value=0.0, step=0.000001, format="%.6f",
+        lon_direct_str = col_lon.text_input(
+            "経度", value="", placeholder="例）139.715678",
         )
+        try:
+            lat_direct = float(lat_direct_str) if lat_direct_str.strip() else 0.0
+            lon_direct = float(lon_direct_str) if lon_direct_str.strip() else 0.0
+        except ValueError:
+            lat_direct = lon_direct = 0.0
     with st.expander("🏗️ ボリューム検討（任意）— 入力するとボリューム検討タブで 3D 表示できます"):
         col_w, col_d, col_r = st.columns(3)
         site_w_in = col_w.number_input(
