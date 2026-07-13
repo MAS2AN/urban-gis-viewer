@@ -1294,10 +1294,78 @@ with tab3:
                 (_px0 + _bldg_w, _py0 + _bldg_d), (_px0, _py0 + _bldg_d),
             ]
 
+            # ── 境界線種別設定（4辺）──
+            def _compass8(deg):
+                dirs = ["北","北東","東","南東","南","南西","西","北西"]
+                return dirs[round(deg / 45) % 8]
+
+            _front_lbl = _compass8(_bearing)
+            _back_lbl  = _compass8((_bearing + 180) % 360)
+            _left_lbl  = _compass8((_bearing + 270) % 360)
+            _right_lbl = _compass8((_bearing + 90)  % 360)
+
+            st.markdown("**📐 境界線種別の設定**")
+            st.caption("コーナー立地など複数道路面がある場合は変更してください。前面道路は自動設定済みです。")
+
+            # ─ サイトダイアグラム（3×3 グリッド）─
+            _g_t, _g_m, _g_b = st.columns([1, 2, 1]), st.columns([1, 2, 1]), st.columns([1, 2, 1])
+
+            with _g_t[1]:   # 背面（北側）
+                st.markdown(f"<center><b>{_back_lbl}（背面）</b></center>", unsafe_allow_html=True)
+                _back_type = st.selectbox("背面種別", ["隣地", "道路"], key="btype_back",
+                                          label_visibility="collapsed")
+                _back_w = st.number_input("背面道路幅(m)", 0.0, 30.0,
+                                          value=6.0, step=0.5, format="%.1f",
+                                          key="bwidth_back",
+                                          label_visibility="collapsed") if _back_type == "道路" else 0.0
+
+            with _g_m[0]:   # 左側
+                st.markdown(f"<b>{_left_lbl}</b>（左）", unsafe_allow_html=True)
+                _left_type = st.selectbox("左側種別", ["隣地", "道路"], key="btype_left",
+                                          label_visibility="collapsed")
+                _left_w = st.number_input("左道路幅(m)", 0.0, 30.0,
+                                          value=6.0, step=0.5, format="%.1f",
+                                          key="bwidth_left",
+                                          label_visibility="collapsed") if _left_type == "道路" else 0.0
+
+            with _g_m[1]:   # 中央（敷地）
+                st.markdown(
+                    f"""<div style='border:2px solid #888;background:#e8eef8;
+                    text-align:center;padding:12px 4px;border-radius:6px;'>
+                    <b>敷地</b><br>{site_w:.0f}m × {site_d:.0f}m<br>
+                    <span style='font-size:0.75rem;color:#555'>{site_area:,.0f}㎡</span></div>""",
+                    unsafe_allow_html=True,
+                )
+
+            with _g_m[2]:   # 右側
+                st.markdown(f"<b>{_right_lbl}</b>（右）", unsafe_allow_html=True)
+                _right_type = st.selectbox("右側種別", ["隣地", "道路"], key="btype_right",
+                                           label_visibility="collapsed")
+                _right_w = st.number_input("右道路幅(m)", 0.0, 30.0,
+                                           value=6.0, step=0.5, format="%.1f",
+                                           key="bwidth_right",
+                                           label_visibility="collapsed") if _right_type == "道路" else 0.0
+
+            with _g_b[1]:   # 前面（道路側・デフォルト）
+                st.markdown(f"<center><b>{_front_lbl}（前面）</b></center>", unsafe_allow_html=True)
+                _front_type = st.selectbox("前面種別", ["道路", "隣地"], key="btype_front",
+                                           label_visibility="collapsed")
+                _front_w = st.number_input("前面道路幅(m)", 0.0, 30.0,
+                                           value=float(road_w or 6.0), step=0.5, format="%.1f",
+                                           key="bwidth_front",
+                                           label_visibility="collapsed") if _front_type == "道路" else 0.0
+
+            _boundaries = {
+                "front": {"type": _front_type, "width": _front_w},
+                "back":  {"type": _back_type,  "width": _back_w},
+                "left":  {"type": _left_type,  "width": _left_w},
+                "right": {"type": _right_type, "width": _right_w},
+            }
+            st.divider()
+
             # ── 逆日影ボリューム（ADS スタイル：影テント）──
             st.subheader("🏗️ 逆日影ボリューム（影テント）")
             st.caption(
-                f"前面道路: **{st.session_state.road_bearing_label}側**　"
                 "色 = 規制種別: 🟣日影規制  🟠道路斜線  🔴隣地斜線  🔵北側斜線  🟢絶対高さ　"
                 "各規制の許容高さで建てたときの冬至日影の包絡面"
             )
@@ -1310,6 +1378,7 @@ with tab3:
                     zone_name=vol.get("zone_name", ""),
                     road_width=road_w or 0.0,
                     abs_height_limit=float(vol.get("abs_height_limit", 0) or 0),
+                    boundaries=_boundaries,
                 )
 
             # 建物ボックス（グレー）+ 影テントパネルのみ（斜線制限なし）

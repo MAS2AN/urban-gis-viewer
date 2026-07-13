@@ -472,22 +472,17 @@ def calc_shadow_tent(
     zone_name: str = "",
     road_width: float = 0.0,
     abs_height_limit: float = 0.0,
+    boundaries: dict = None,
 ) -> dict:
     """
     ADS スタイル影テント（規制種別ごとに色分け）
+    updated: 2026-07-13d  # boundaries パラメータ追加
 
-    各高さ規制が許容する最大建物高さで建てたとき、冬至日に落とす
-    影の包絡面を規制ごとの色で描画する。
-
-    色分け（ADS 準拠）:
-      🟣 日影規制（逆日影推定高さ）  #CC00CC  マゼンタ
-      🟠 道路斜線制限               #FF6600  橙
-      🔴 隣地斜線制限               #CC0000  赤
-      🔵 北側斜線制限               #0044DD  青
-      🟢 絶対高さ制限               #008800  緑
-
-    バグ修正: フットプリントが CW 巻き（→ 法線が内向き）のため
-    条件を反転（内積 < 0 の辺 = 真の外向き辺 = 影方向を向く辺）
+    boundaries = {
+        "front": {"type": "道路"/"隣地", "width": float},
+        "back":  {...}, "left": {...}, "right": {...}
+    }
+    front=y=0辺(道路側), back=y=site_d辺, left=x=0辺, right=x=site_w辺
 
     Returns: {traces: [go.Mesh3d ...], regulations: dict}
     """
@@ -501,6 +496,14 @@ def calc_shadow_tent(
     cx = sum(p[0] for p in bldg_fp) / len(bldg_fp)
     cy = sum(p[1] for p in bldg_fp) / len(bldg_fp)
 
+    # 各辺の重心からの距離: front=y=0辺, back=y=site_d辺, left=x=0辺, right=x=site_w辺
+    _side_dist = {
+        "front": cy,
+        "back":  site_d - cy,
+        "left":  cx,
+        "right": site_w - cx,
+    }
+
     regulations = {}  # {"規制名": (height_m, color, opacity)}
 
     # 日影規制（逆日影推定高さ）
@@ -508,17 +511,30 @@ def calc_shadow_tent(
         regulations["日影規制"] = (height_m, "#CC00CC", 0.50)
 
     # 道路斜線制限
-    if road_width > 0 and zone_name:
+    if zone_name:
         sf = ROAD_SLOPE.get(zone_name, 0.0)
         if sf > 0:
-            H_road = (road_width + cy) * sf
-            if H_road > meas_h_m:
-                regulations["道路斜線制限"] = (H_road, "#FF6600", 0.42)
+            if boundaries:
+                H_road_best = None
+                for side, info in boundaries.items():
+                    if info.get("type") == "道路":
+                        w = float(info.get("width") or 0.0)
+                        H_r = (w + _side_dist[side]) * sf
+                        if H_r > meas_h_m:
+                            if H_road_best is None or H_r > H_road_best:
+                                H_road_best = H_r
+                if H_road_best is not None:
+                    regulations["道路斜線制限"] = (H_road_best, "#FF6600", 0.42)
+            elif road_width > 0:
+                H_road = (road_width + cy) * sf
+                if H_road > meas_h_m:
+                    regulations["道路斜線制限"] = (H_road, "#FF6600", 0.42)
 
-    # 北側斜線制限
+    # 北側斜線制限（back 辺距離を使用）
     north_rise = NORTH_RISE.get(zone_name, 0)
     if north_rise > 0:
-        H_north = north_rise + (site_d - cy) * 1.25
+        back_dist = _side_dist["back"]
+        H_north = north_rise + back_dist * 1.25
         if H_north > meas_h_m:
             regulations["北側斜線制限"] = (H_north, "#0044DD", 0.42)
 
@@ -527,9 +543,6 @@ def calc_shadow_tent(
         "第一種中高層住居専用地域", "第二種中高層住居専用地域",
         "第一種住居地域", "第二種住居地域", "準住居地域",
     }
-    _ADJ_COMMERCIAL = {
-        "近隣商業地域", "商業地域", "準工業地域", "工業地域", "工業専用地域",
-    }
     _ADJ_EXCLUDED = {
         "第一種低層住居専用地域", "第二種低層住居専用地域", "田園住居地域",
     }
@@ -537,9 +550,15 @@ def calc_shadow_tent(
         is_res = zone_name in _ADJ_RESIDENTIAL
         base_h = 20.0 if is_res else 31.0
         adj_sf = 1.25 if is_res else 2.5
-        min_d = min(cx, site_w - cx, cy, site_d - cy)
-        H_adj = base_h + min_d * adj_sf
-        if H_adj > meas_h_m:
+        if boundaries:
+            H_adj_list = []
+            for side, info in boundaries.items():
+                if info.get("type") == "隣地":
+                    H_adj_list.append(base_h + _side_dist[side] * adj_sf)
+            H_adj = min(H_adj_list) if H_adj_list else None
+        else:
+            H_adj = base_h + min(_side_dist.values()) * adj_sf
+        if H_adj is not None and H_adj > meas_h_m:
             regulations["隣地斜線制限"] = (H_adj, "#CC0000", 0.38)
 
     # 絶対高さ制限
