@@ -583,45 +583,63 @@ def geocode(address: str) -> dict:
 
     # ── 2nd: Nominatim (OSM) フォールバック ──
     if lat is None:
-        # 丁目→ハイフン変換など、複数フォーマットを試す
-        def _nom_variants(addr):
-            yield addr
-            # 「4丁目16-18」→「4-16-18」
-            v = re.sub(r"(\d+)丁目(\d+)[−\-](\d+)", r"\1-\2-\3", addr)
-            if v != addr:
-                yield v
-            # 番号を除いて丁目まで
-            v2 = re.sub(r"(\d+)[−\-]\d+$", r"\1", addr).rstrip("-")
-            if v2 != addr:
-                yield v2
-            # 丁目以下を削除して区まで
-            v3 = re.sub(r"\d+丁目.*$", "", addr).rstrip()
-            if v3 and v3 != addr:
-                yield v3
-
         nom_url = "https://nominatim.openstreetmap.org/search"
+        nom_hdrs = {"User-Agent": "urban-gis-viewer/1.0", "Accept-Language": "ja"}
         nom_data = []
-        for q in _nom_variants(address_norm):
+
+        def _nom_get(params):
             try:
-                nom_resp = requests.get(
-                    nom_url,
-                    params={"q": q, "format": "json", "countrycodes": "jp", "limit": 1,
-                            "accept-language": "ja"},
-                    headers={"User-Agent": "urban-gis-viewer/1.0"},
-                    timeout=15,
-                )
-                nom_resp.raise_for_status()
-                nom_data = nom_resp.json()
-                if nom_data:
-                    break
+                r = requests.get(nom_url, params={**params, "format": "json",
+                                  "countrycodes": "jp", "limit": 1},
+                                 headers=nom_hdrs, timeout=15)
+                r.raise_for_status()
+                return r.json()
             except Exception:
-                continue
+                return []
+
+        # ── 日本語住所を構成要素に分解 ──
+        def _split_jp(addr):
+            """都道府県・市区町村・以下 を分解。失敗時は None。"""
+            m1 = re.match(r"^(.*?[都道府県])", addr)
+            if not m1:
+                return None
+            pref = m1.group(1)
+            rest = addr[m1.end():]
+            m2 = re.match(r"^(.*?[市区町村郡])", rest)
+            if not m2:
+                return pref, "", rest
+            city = m2.group(1)
+            street_raw = rest[m2.end():]
+            # 「4丁目16-18」→「4-16-18」
+            street = re.sub(r"(\d+)丁目(\d+)-(\d+)", r"\1-\2-\3", street_raw)
+            street = re.sub(r"(\d+)丁目", r"\1-", street).rstrip("-")
+            return pref, city, street
+
+        parts = _split_jp(address_norm)
+
+        # 戦略1: 構造化クエリ（最も精度が高い）
+        if parts:
+            pref, city, street = parts
+            if street:
+                nom_data = _nom_get({"state": pref, "city": city, "street": street})
+            if not nom_data and city:
+                nom_data = _nom_get({"state": pref, "city": city})
+
+        # 戦略2: 自由テキスト（丁目→ハイフン変換）
+        if not nom_data:
+            q2 = re.sub(r"(\d+)丁目(\d+)-(\d+)", r"\1-\2-\3", address_norm)
+            nom_data = _nom_get({"q": q2})
+
+        # 戦略3: 自由テキスト（丁目以下省略）
+        if not nom_data and parts:
+            pref, city, _ = parts
+            nom_data = _nom_get({"q": pref + city})
 
         if not nom_data:
             raise ValueError(
                 f"住所が見つかりません: {address_norm}\n"
-                "（国土地理院サービスが一時停止中のため精度が低下しています。"
-                "緯度・経度を直接入力するか、しばらく後で再試行してください）"
+                "（国土地理院が一時停止中のため代替検索も精度が低下しています。"
+                "しばらく後で再試行してください）"
             )
         lat = float(nom_data[0]["lat"])
         lon = float(nom_data[0]["lon"])
