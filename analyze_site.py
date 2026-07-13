@@ -29,6 +29,7 @@ import math
 import os
 import re
 import sys
+import unicodedata
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -559,13 +560,16 @@ def research_reinfolib(lat: float, lon: float, api_key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def geocode(address: str) -> dict:
+    # 全角数字・記号→半角に正規化（Nominatim は全角を認識しないことがある）
+    address_norm = unicodedata.normalize("NFKC", address)
+
     lat = lon = None
     normalized = address
     muni_code = ""
 
     # ── 1st: 国土地理院 ──
     try:
-        resp = requests.get(GEOCODER_URL, params={"q": address}, timeout=15)
+        resp = requests.get(GEOCODER_URL, params={"q": address_norm}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         if data:
@@ -583,21 +587,21 @@ def geocode(address: str) -> dict:
             nom_url = "https://nominatim.openstreetmap.org/search"
             nom_resp = requests.get(
                 nom_url,
-                params={"q": address, "format": "json", "countrycodes": "jp", "limit": 1},
+                params={"q": address_norm, "format": "json", "countrycodes": "jp", "limit": 1},
                 headers={"User-Agent": "urban-gis-viewer/1.0"},
                 timeout=15,
             )
             nom_resp.raise_for_status()
             nom_data = nom_resp.json()
             if not nom_data:
-                raise ValueError(f"住所が見つかりません: {address}")
+                raise ValueError(f"住所が見つかりません: {address_norm}")
             lat = float(nom_data[0]["lat"])
             lon = float(nom_data[0]["lon"])
             normalized = nom_data[0].get("display_name", address)
         except ValueError:
             raise
         except Exception as e:
-            raise ValueError(f"ジオコーディング失敗（国土地理院・OSM ともに応答なし）: {address}") from e
+            raise ValueError(f"ジオコーディング失敗（国土地理院・OSM ともに応答なし）: {address_norm}") from e
 
     # ── 逆ジオコーダーで市区町村コードを取得 ──
     if not muni_code:
