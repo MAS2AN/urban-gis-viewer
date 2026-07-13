@@ -26,7 +26,7 @@ from streamlit_folium import st_folium
 # analyze_site.py（同フォルダ）から法規調査関数をインポート
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze_site import YOTO_DB, build_report, geocode, research, volume_study
-from shadow_calc import calc_shadows, suggest_height_solar, calc_reverse_shadow, calc_volume_from_shadow
+from shadow_calc import calc_shadows, suggest_height_solar, calc_reverse_shadow, calc_volume_from_shadow, calc_shadow_tent
 
 _COMPASS_GRID = [
     [("↖ 北西", 315), ("↑ 北",  0),   ("↗ 北東",  45)],
@@ -1245,62 +1245,65 @@ with tab3:
                 (_px0 + _bldg_w, _py0 + _bldg_d), (_px0, _py0 + _bldg_d),
             ]
 
-            # ── 逆日影ボリューム + 斜線制限（メイン 3D）──
+            # ── 逆日影ボリューム（ADS スタイル：影テント）+ 斜線制限 ──
             st.subheader("🏗️ 逆日影ボリューム + 斜線制限（3D）")
             st.caption(
                 f"前面道路: **{st.session_state.road_bearing_label}側**（手前=道路・奥=北）　"
-                "🔵青=高さ制限が厳しい（北側）　🔴赤=余裕がある（道路側）　"
+                "影テント: 🟣朝（青紫）→ 昼（マゼンタ）→ 夕（黄）　"
+                "各時刻の影が届く斜面パネルの集合（ADS 同方式）　"
                 "| 橙面=道路斜線　赤面=隣地斜線　青面=北側斜線（建基法第56条）"
             )
 
-            with st.spinner("逆日影ボリューム計算中（2mグリッド）…"):
-                _vol_res = calc_volume_from_shadow(
-                    _bldg_fp, _meas_h_m,
+            with st.spinner("影テント（逆日影ボリューム）計算中…"):
+                _tent_res = calc_shadow_tent(
+                    _bldg_fp, vol["est_height"], _meas_h_m,
                     st.session_state.lat, st.session_state.lon,
-                    _bearing, _thresh_h, site_w, site_d,
-                    grid_res=2.0, margin=30.0,
+                    _bearing, site_w, site_d,
                 )
 
-            if _vol_res["height_map"]:
-                fig_main = _create_volume_3d(
-                    vol, site_w, site_d, road_width=road_w,
-                    show_shasen=False, show_building=False,
-                )
-                for _t in _vol_res["traces"]:
+            # 建物ボックス（半透明グレー）+ 影テントパネル + 斜線制限
+            fig_main = _create_volume_3d(
+                vol, site_w, site_d, road_width=road_w,
+                show_shasen=False, show_building=True,
+            )
+            for _t in _tent_res["traces"]:
+                fig_main.add_trace(_t)
+            if vol.get("zone_name"):
+                for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
                     fig_main.add_trace(_t)
-                if vol.get("zone_name"):
-                    for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
-                        fig_main.add_trace(_t)
-                fig_main.update_layout(height=530)
-                st.plotly_chart(fig_main, use_container_width=True)
+            fig_main.update_layout(height=560)
+            st.plotly_chart(fig_main, use_container_width=True)
 
-                _hm = _vol_res["height_map"]
-                _hvals = list(_hm.values())
-                _h_avg = sum(_hvals) / len(_hvals)
-                _h_min = min(_hvals)
-                _h_max = max(_hvals)
-                col_v1, col_v2, col_v3 = st.columns(3)
-                col_v1.metric("平均許容高さ", f"{_h_avg:.1f}m")
-                col_v2.metric("最小許容高さ（北側）", f"{_h_min:.1f}m")
-                col_v3.metric("最大許容高さ（道路側）", f"{_h_max:.1f}m")
+            st.caption(
+                f"影テント: 各時刻の太陽方向に対して建物外周エッジ（H={vol['est_height']:.0f}m）から"
+                f"測定面（h={_meas_h_m}m）まで延びる斜面パネルの集合。"
+                "テントの外に建物が出ると、その時刻の影が敷地外へ届く。"
+                "斜線制限面との交差を確認することで規制適合の概略判断が可能。"
+            )
 
-                if _h_min < vol["est_height"]:
-                    st.warning(
-                        f"⚠️ フットプリント内の一部（最小 {_h_min:.1f}m）で "
-                        f"日影規制を満たす高さが当初建物高さ {vol['est_height']:.0f}m を下回っています。"
-                        "青い部分の屋根を下げることで規制に適合できます。"
+            # フットプリント内高さマップ（折りたたみ）
+            with st.expander("📊 フットプリント内 許容高さマップ（y方向スライス別）", expanded=False):
+                with st.spinner("許容高さマップ計算中（スライスバイナリサーチ）…"):
+                    _vol_res = calc_volume_from_shadow(
+                        _bldg_fp, _meas_h_m,
+                        st.session_state.lat, st.session_state.lon,
+                        _bearing, _thresh_h, site_w, site_d,
+                        grid_res=2.0, margin=30.0,
                     )
-                else:
-                    st.success(
-                        f"✅ フットプリント全域で当初建物高さ {vol['est_height']:.0f}m 以上が確保できます"
-                        f"（最小許容高さ {_h_min:.1f}m）。"
+                if _vol_res["height_map"]:
+                    fig_hmap = _create_volume_3d(
+                        vol, site_w, site_d, road_width=road_w,
+                        show_shasen=False, show_building=False,
                     )
-                st.caption(
-                    "逆日影ボリューム: 各フットプリント点の影が敷地境界に届くN番目の時刻から求めた高さ制限エンベロープ。"
-                    "各柱独立計算の保守的近似。実施設計では連続壁・隣棟効果を加味した精密計算が必要です。"
-                )
-            else:
-                st.warning("逆日影ボリュームの計算に十分な日照時間がありません（冬至の条件を確認してください）。")
+                    for _t in _vol_res["traces"]:
+                        fig_hmap.add_trace(_t)
+                    st.plotly_chart(fig_hmap, use_container_width=True)
+                    _hm = _vol_res["height_map"]
+                    _hvals = list(_hm.values())
+                    col_v1, col_v2, col_v3 = st.columns(3)
+                    col_v1.metric("平均許容高さ", f"{sum(_hvals)/len(_hvals):.1f}m")
+                    col_v2.metric("最小（北側）", f"{min(_hvals):.1f}m")
+                    col_v3.metric("最大（道路側）", f"{max(_hvals):.1f}m")
 
             # ── 等時間日影チェック（詳細・折りたたみ）──
             st.divider()

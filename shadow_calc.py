@@ -460,6 +460,106 @@ def calc_volume_from_shadow(
     return {"traces": traces, "height_map": height_map}
 
 
+def calc_shadow_tent(
+    bldg_fp: list,
+    height_m: float,
+    meas_h_m: float,
+    lat_deg: float,
+    lon_deg: float,
+    road_bearing_deg: float,
+    site_w: float,
+    site_d: float,
+) -> dict:
+    """
+    ADS スタイル逆日影ボリューム（影テント表示）
+
+    各時刻の太陽方向に対して、建物外周エッジの上端(H)から
+    影の先端(測定面高さ meas_h)までを繋ぐ「斜面パネル」を生成し、
+    全パネルの集合として影の3D包絡面（テント形状）を返す。
+
+    生活産業研究所 ADS のボリューム表示と同じ計算原理:
+      各辺のうち影方向を「向いている」辺のみパネルを作る。
+      パネル = 矩形 (p1→p2 上端H) ×(影先端 L = (H-meas_h)/tan(alt))
+
+    Returns: {traces: [go.Mesh3d ...], n_steps: int}
+    """
+    import plotly.graph_objects as go
+
+    def _step_color(t_hr):
+        """8:00=青紫 → 12:00=マゼンタ → 16:00=黄。ADS 配色に近い虹グラデーション。"""
+        ratio = (t_hr - TIME_START) / max(TIME_END - TIME_START, 1e-6)
+        # HSL: 270°(青紫) → 0°/360°(赤) → 60°(黄) を ratio 0→1 で変化
+        hue = int((1.0 - ratio) * 270)
+        return f"hsl({hue},90%,60%)"
+
+    traces = []
+    n_steps = 0
+
+    t = TIME_START
+    while t <= TIME_END + 1e-9:
+        alt_d, az_d = solar_position(t, lat_deg, lon_deg)
+        if alt_d >= 2.0:
+            geo_dx = -math.sin(math.radians(az_d))
+            geo_dy = -math.cos(math.radians(az_d))
+            sdx, sdy = _geo_to_plot(geo_dx, geo_dy, road_bearing_deg)
+            alt_r = math.radians(alt_d)
+            tan_alt = math.tan(alt_r)
+
+            if tan_alt < 1e-6:
+                t += TIME_STEP; continue
+
+            L = (height_m - meas_h_m) / tan_alt  # 影の長さ（m）
+            if L < 0.1:
+                t += TIME_STEP; continue
+
+            color = _step_color(t)
+            n_verts = len(bldg_fp)
+
+            for i in range(n_verts):
+                p1x, p1y = bldg_fp[i]
+                p2x, p2y = bldg_fp[(i + 1) % n_verts]
+
+                # 辺の外向き法線（辺を左→右で見たとき右手が外）
+                nx, ny = -(p2y - p1y), (p2x - p1x)
+                # 影方向と法線の内積 > 0 → この辺は影の外側を向く → パネル生成
+                if nx * sdx + ny * sdy <= 0:
+                    continue
+
+                # パネル4頂点: 建物エッジ上端2点 + 影先端2点
+                xs = [p1x, p2x, p2x + L * sdx, p1x + L * sdx]
+                ys = [p1y, p2y, p2y + L * sdy, p1y + L * sdy]
+                zs = [height_m, height_m, meas_h_m, meas_h_m]
+
+                traces.append(go.Mesh3d(
+                    x=xs, y=ys, z=zs,
+                    i=[0, 0], j=[1, 2], k=[2, 3],
+                    color=color,
+                    opacity=0.28,
+                    showlegend=False,
+                    hovertemplate=(
+                        f"{t:.1f}h: 影長 {L:.1f}m"
+                        f"<br>太陽高度 {alt_d:.1f}°"
+                        "<extra></extra>"
+                    ),
+                ))
+            n_steps += 1
+        t += TIME_STEP
+
+    # 凡例用ダミートレース
+    traces.append(go.Scatter3d(
+        x=[None], y=[None], z=[None],
+        mode="markers",
+        marker=dict(
+            color=["hsl(270,90%,60%)", "hsl(135,90%,60%)", "hsl(60,90%,60%)"],
+            size=8, symbol="square",
+        ),
+        name=f"影包絡面（{n_steps}時刻 各30分）",
+        showlegend=True,
+    ))
+
+    return {"traces": traces, "n_steps": n_steps}
+
+
 def calc_reverse_shadow(
     bldg_fp: list,
     meas_h_m: float,
