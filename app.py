@@ -133,6 +133,31 @@ if submitted and address.strip():
         if info.get("errors"):
             st.caption(f"取得エラー（一部データなし）: {', '.join(info['errors'])}")
 
+        # ── 平面図生成ツールへの連携リンク ──────────────────────────────
+        import re as _re
+        def _extract_num(s):
+            m = _re.search(r'(\d+(?:\.\d+)?)', str(s or ""))
+            return m.group(1) if m else ""
+
+        _zone_val = info.get("zone", "")
+        _far_val  = _extract_num(info.get("far",  ""))
+        _bcr_val  = _extract_num(info.get("bcr",  ""))
+        _fire_val = info.get("fire", "")
+
+        if _zone_val and _far_val and _bcr_val:
+            _fp_url = (
+                f"http://localhost:8503/"
+                f"?zone={_zone_val}"
+                f"&far={_far_val}"
+                f"&bcr={_bcr_val}"
+                f"&fire={_fire_val}"
+            )
+            st.success(
+                f"✅ 法規情報を取得しました。"
+                f"[📐 平面図生成ツールで開く]({_fp_url})"
+                f"（※ローカル起動時のみ有効）",
+            )
+
         st.divider()
 
         # ── 地図（folium）──────────────────────────
