@@ -1029,7 +1029,7 @@ with tab1:
     folium.LayerControl(collapsed=False).add_to(m)
 
     if not st.session_state.lat:
-        st.info("地図上をクリックするか、上の検索フォームで住所を入力してください。", icon="👆")
+        st.info("上の検索フォームで住所を入力してください。", icon="👆")
 
     map_data = st_folium(m, use_container_width=True, height=560, returned_objects=["last_clicked"])
 
@@ -1405,117 +1405,6 @@ with tab3:
                 "パネルが敷地境界を超えると、その時刻の影が隣地へ届く。"
             )
 
-            # 斜線制限は折りたたみで表示
-            with st.expander("📐 斜線制限エンベロープ（3D）", expanded=False):
-                if vol.get("zone_name"):
-                    fig_sh = _create_volume_3d(
-                        vol, site_w, site_d, road_width=road_w,
-                        show_shasen=False, show_building=True,
-                    )
-                    for _t in _shasen_traces(vol["zone_name"], site_w, site_d, road_w):
-                        fig_sh.add_trace(_t)
-                    fig_sh.update_layout(height=480)
-                    st.plotly_chart(fig_sh, use_container_width=True)
-                    st.caption("橙=道路斜線 | 赤=隣地斜線 | 青=北側斜線（建基法第56条）")
-
-            # フットプリント内高さマップ（折りたたみ）
-            with st.expander("📊 フットプリント内 許容高さマップ（y方向スライス別）", expanded=False):
-                with st.spinner("許容高さマップ計算中（スライスバイナリサーチ）…"):
-                    _vol_res = calc_volume_from_shadow(
-                        _bldg_fp, _meas_h_m,
-                        st.session_state.lat, st.session_state.lon,
-                        _bearing, _thresh_h, site_w, site_d,
-                        grid_res=2.0, margin=30.0,
-                    )
-                if _vol_res["height_map"]:
-                    fig_hmap = _create_volume_3d(
-                        vol, site_w, site_d, road_width=road_w,
-                        show_shasen=False, show_building=False,
-                    )
-                    for _t in _vol_res["traces"]:
-                        fig_hmap.add_trace(_t)
-                    st.plotly_chart(fig_hmap, use_container_width=True)
-                    _hm = _vol_res["height_map"]
-                    _hvals = list(_hm.values())
-                    col_v1, col_v2, col_v3 = st.columns(3)
-                    col_v1.metric("平均許容高さ", f"{sum(_hvals)/len(_hvals):.1f}m")
-                    col_v2.metric("最小（北側）", f"{min(_hvals):.1f}m")
-                    col_v3.metric("最大（道路側）", f"{max(_hvals):.1f}m")
-
-            # ── 等時間日影チェック（詳細・折りたたみ）──
-            st.divider()
-            with st.expander("☀️ 等時間日影チェック（詳細）", expanded=False):
-                st.caption(
-                    "建基法第56条の2 に基づく概算計算（2mグリッド・30分刻み・確認申請レベルではありません）。"
-                )
-
-                with st.spinner("日影計算中（冬至日 8〜16時 / 2mグリッド）…"):
-                    _sh_res = calc_shadows(
-                        _bldg_fp, vol["est_height"], _meas_h_m,
-                        st.session_state.lat, st.session_state.lon,
-                        _bearing, _thresh_h, site_w, site_d,
-                    )
-
-                fig2 = _create_volume_3d(vol, site_w, site_d, road_width=road_w, show_shasen=False)
-                for _t in _sh_res["traces"]:
-                    fig2.add_trace(_t)
-                st.caption(
-                    f"冬至日 / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
-                    "│ 🟠 敷地内  🔴 敷地外逸脱  🔵 全日影ユニオン"
-                )
-                st.plotly_chart(fig2, use_container_width=True)
-
-                if _sh_res["violation"]:
-                    st.error(
-                        f"⚠️ **日影規制オーバー**: H={vol['est_height']:.0f}m では "
-                        f"{_thresh_h}時間日影が敷地外へ **{_sh_res['violation_area_m2']:.0f}㎡** 逸脱します。"
-                    )
-                    with st.spinner("適合高さをバイナリサーチ中…"):
-                        _sug_h = suggest_height_solar(
-                            _bldg_fp, vol["est_height"], _meas_h_m,
-                            st.session_state.lat, st.session_state.lon,
-                            _bearing, _thresh_h, site_w, site_d,
-                        )
-                    if _sug_h > 0:
-                        st.info(f"💡 **縮小案: H ≤ {_sug_h:.1f}m** なら敷地内に収まります（バイナリサーチ概算）")
-                        st.markdown(f"**📐 縮小案モデル（H={_sug_h:.1f}m）の等時間日影**")
-                        _sug_vol = dict(vol)
-                        _sug_vol["est_height"] = _sug_h
-                        _sug_vol["est_floors"] = max(1, int(math.ceil(_sug_h / vol.get("floor_height", 3.5))))
-
-                        with st.spinner(f"縮小案（H={_sug_h:.1f}m）の日影を計算中…"):
-                            _sug_sh_res = calc_shadows(
-                                _bldg_fp, _sug_h, _meas_h_m,
-                                st.session_state.lat, st.session_state.lon,
-                                _bearing, _thresh_h, site_w, site_d,
-                            )
-
-                        fig3 = _create_volume_3d(_sug_vol, site_w, site_d, road_width=road_w, show_shasen=False)
-                        for _t in _sug_sh_res["traces"]:
-                            fig3.add_trace(_t)
-                        st.caption(
-                            f"縮小案 H={_sug_h:.1f}m / 測定高 {_meas_h_m}m / {_thresh_h}時間日影 "
-                            "│ 🟠 敷地内  🔴 敷地外逸脱"
-                        )
-                        st.plotly_chart(fig3, use_container_width=True)
-
-                        if _sug_sh_res["violation"]:
-                            st.warning(
-                                f"⚠️ 縮小案でもわずかに逸脱（{_sug_sh_res['violation_area_m2']:.0f}㎡）。"
-                                "グリッド誤差の範囲内のため、詳細検討では専用ソフトで確認してください。"
-                            )
-                        else:
-                            st.success(
-                                f"✅ 縮小案（H={_sug_h:.1f}m）では{_thresh_h}時間日影が敷地内に収まります "
-                                f"（等時間日影面積 {_sug_sh_res['iso_area_m2']:.0f}㎡）"
-                            )
-                    else:
-                        st.warning("H=1m でも逸脱するため、用途地域・建物位置の再検討が必要です。")
-                else:
-                    st.success(
-                        f"✅ **日影OK**: {_thresh_h}時間日影は敷地内に収まります "
-                        f"（等時間日影面積 {_sh_res['iso_area_m2']:.0f}㎡）"
-                    )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
