@@ -763,7 +763,7 @@ if not api_key:
 
 # ── 前面道路の方角コンパス（フォーム外・session_state で保持）──
 with st.container():
-    st.markdown("**🧭 前面道路の方角**（クリックで選択）")
+    st.markdown("**🧭 前面道路の方向**（クリックで選択）")
     _comp_rows = [st.columns([1, 1, 1, 0.05, 2]) for _ in range(3)]
     for _ri, _row in enumerate(_COMPASS_GRID):
         for _ci, _cell in enumerate(_row):
