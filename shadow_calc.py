@@ -508,7 +508,7 @@ def calc_shadow_tent(
 
     # 日影規制（逆日影推定高さ）
     if height_m > meas_h_m:
-        regulations["日影規制"] = (height_m, "#CC00CC", 0.50)
+        regulations["日影規制"] = (height_m, "#CC00CC", 0.32)
 
     # 道路斜線制限
     if zone_name:
@@ -524,11 +524,11 @@ def calc_shadow_tent(
                             if H_road_best is None or H_r > H_road_best:
                                 H_road_best = H_r
                 if H_road_best is not None:
-                    regulations["道路斜線制限"] = (H_road_best, "#FF6600", 0.42)
+                    regulations["道路斜線制限"] = (H_road_best, "#FF6600", 0.26)
             elif road_width > 0:
                 H_road = (road_width + cy) * sf
                 if H_road > meas_h_m:
-                    regulations["道路斜線制限"] = (H_road, "#FF6600", 0.42)
+                    regulations["道路斜線制限"] = (H_road, "#FF6600", 0.26)
 
     # 北側斜線制限（back 辺距離を使用）
     north_rise = NORTH_RISE.get(zone_name, 0)
@@ -536,7 +536,7 @@ def calc_shadow_tent(
         back_dist = _side_dist["back"]
         H_north = north_rise + back_dist * 1.25
         if H_north > meas_h_m:
-            regulations["北側斜線制限"] = (H_north, "#0044DD", 0.42)
+            regulations["北側斜線制限"] = (H_north, "#0044DD", 0.26)
 
     # 隣地斜線制限（低層住居専用・田園住居は不適用）
     _ADJ_RESIDENTIAL = {
@@ -559,11 +559,11 @@ def calc_shadow_tent(
         else:
             H_adj = base_h + min(_side_dist.values()) * adj_sf
         if H_adj is not None and H_adj > meas_h_m:
-            regulations["隣地斜線制限"] = (H_adj, "#CC0000", 0.38)
+            regulations["隣地斜線制限"] = (H_adj, "#CC0000", 0.22)
 
     # 絶対高さ制限
     if abs_height_limit > meas_h_m:
-        regulations["絶対高さ制限"] = (abs_height_limit, "#008800", 0.45)
+        regulations["絶対高さ制限"] = (abs_height_limit, "#008800", 0.28)
 
     # 規制が一つも無い場合は日影規制のみ
     if not regulations:
@@ -574,6 +574,8 @@ def calc_shadow_tent(
     rows_n = N_SHAD + 1
     cols_n = N_EDGE + 1
     n_verts = len(bldg_fp)
+    viol_x, viol_y, viol_z = [], [], []
+    max_tent_h = max((v[0] for v in regulations.values()), default=meas_h_m)
 
     for reg_name, (H, color, opacity) in regulations.items():
         all_xs, all_ys, all_zs = [], [], []
@@ -610,6 +612,13 @@ def calc_shadow_tent(
                                     all_xs.append(ex + v * L * sdx)
                                     all_ys.append(ey + v * L * sdy)
                                     all_zs.append(H - v * (H - meas_h_m))
+                                # 測定面の影先端（v=1.0）が敷地外かチェック
+                                tx = ex + L * sdx
+                                ty = ey + L * sdy
+                                if tx < -0.5 or tx > site_w + 0.5 or ty < -0.5 or ty > site_d + 0.5:
+                                    viol_x.append(tx)
+                                    viol_y.append(ty)
+                                    viol_z.append(meas_h_m)
 
                             for ci in range(N_EDGE):
                                 for ri in range(N_SHAD):
@@ -637,7 +646,14 @@ def calc_shadow_tent(
                 hovertemplate=f"{reg_name}  H={H:.1f}m<extra></extra>",
             ))
 
-    return {"traces": traces, "regulations": {k: v[0] for k, v in regulations.items()}}
+    viol_pts = list(zip(viol_x, viol_y, viol_z))
+    return {
+        "traces": traces,
+        "regulations": {k: v[0] for k, v in regulations.items()},
+        "violation_pts": viol_pts,
+        "max_tent_h": max_tent_h,
+        "has_violation": len(viol_pts) > 0,
+    }
 
 
 def calc_reverse_shadow(

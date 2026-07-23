@@ -1388,21 +1388,99 @@ with tab3:
             )
             for _t in _tent_res["traces"]:
                 fig_main.add_trace(_t)
+
+            # ── 測定面（水平 h=meas_h_m のプレーン）──
+            fig_main.add_trace(go.Mesh3d(
+                x=[0, site_w, site_w, 0], y=[0, 0, site_d, site_d],
+                z=[_meas_h_m] * 4,
+                i=[0, 0], j=[1, 2], k=[2, 3],
+                color="#4499FF", opacity=0.18,
+                name=f"測定面 h={_meas_h_m}m", showlegend=True, hoverinfo="none",
+            ))
+            fig_main.add_trace(go.Scatter3d(
+                x=[0, site_w, site_w, 0, 0], y=[0, 0, site_d, site_d, 0],
+                z=[_meas_h_m] * 5,
+                mode="lines", line=dict(color="#2266CC", width=2, dash="dot"),
+                showlegend=False, hoverinfo="none",
+            ))
+
+            # ── 敷地境界フェンス（垂直ライン + 上部フレーム）──
+            _fence_h = max(_tent_res.get("max_tent_h", vol["est_height"]) * 1.2, _meas_h_m + 8.0)
+            for (cx, cy) in [(0, 0), (site_w, 0), (site_w, site_d), (0, site_d)]:
+                fig_main.add_trace(go.Scatter3d(
+                    x=[cx, cx], y=[cy, cy], z=[0, _fence_h],
+                    mode="lines", line=dict(color="#CC2222", width=3),
+                    showlegend=False, hoverinfo="none",
+                ))
+            # 上部フレーム（敷地境界の「天井」）
+            fig_main.add_trace(go.Scatter3d(
+                x=[0, site_w, site_w, 0, 0], y=[0, 0, site_d, site_d, 0],
+                z=[_fence_h] * 5,
+                mode="lines", line=dict(color="#CC2222", width=2, dash="dash"),
+                name="敷地境界フェンス", showlegend=True, hoverinfo="none",
+            ))
+            # 境界壁面（半透明）
+            for (fx0, fy0, fx1, fy1) in [
+                (0, 0, site_w, 0),
+                (site_w, 0, site_w, site_d),
+                (0, site_d, site_w, site_d),
+                (0, 0, 0, site_d),
+            ]:
+                fig_main.add_trace(go.Mesh3d(
+                    x=[fx0, fx1, fx1, fx0], y=[fy0, fy1, fy1, fy0],
+                    z=[0, 0, _fence_h, _fence_h],
+                    i=[0, 0], j=[1, 2], k=[2, 3],
+                    color="#FF6666", opacity=0.06,
+                    showlegend=False, hoverinfo="none",
+                ))
+
+            # ── 越境ハイライト（測定面で敷地外に出た影先端を赤でマーク）──
+            _viol_pts = _tent_res.get("violation_pts", [])
+            if _viol_pts:
+                fig_main.add_trace(go.Scatter3d(
+                    x=[p[0] for p in _viol_pts],
+                    y=[p[1] for p in _viol_pts],
+                    z=[p[2] for p in _viol_pts],
+                    mode="markers",
+                    marker=dict(size=4, color="#FF0000", opacity=0.55, symbol="x"),
+                    name="⚠️ 日影越境点（測定面）",
+                    showlegend=True,
+                ))
+
+            _has_viol = _tent_res.get("has_violation", False)
             fig_main.update_layout(
-                height=580,
+                height=600,
                 scene=dict(
                     aspectmode="data",
-                    xaxis_title="幅(m)",
-                    yaxis_title="奥行(m)  ←道路",
+                    xaxis_title="幅(m) →東",
+                    yaxis_title="奥行(m) ←道路",
                     zaxis_title="高さ(m)",
+                    zaxis=dict(range=[0, _fence_h]),
+                    camera=dict(
+                        eye=dict(x=1.5, y=-2.2, z=1.0),
+                        center=dict(x=0, y=0, z=0),
+                    ),
                 ),
             )
+            if _has_viol:
+                st.error(
+                    f"⚠️ **日影越境あり** — 測定面（h={_meas_h_m}m）で敷地境界外に影が到達しています。"
+                    "赤×マークが越境点です。高さを下げるか建物を後退させる必要があります。",
+                    icon="🚨",
+                )
+            else:
+                st.success(
+                    f"✅ **日影越境なし** — 測定面（h={_meas_h_m}m）での影はすべて敷地内に収まっています。",
+                    icon="☀️",
+                )
+
             st.plotly_chart(fig_main, use_container_width=True)
 
             st.caption(
                 f"影テント: 各時刻の太陽方向に対して建物エッジ（H={vol['est_height']:.0f}m）"
-                f"から測定面（h={_meas_h_m}m）まで延びる斜面パネルの集合。"
-                "パネルが敷地境界を超えると、その時刻の影が隣地へ届く。"
+                f"から測定面（h={_meas_h_m}m, 青面）まで延びる斜面パネルの集合。"
+                "赤い垂直フェンス＝敷地境界。パネルがフェンスを超えた部分が越境。"
+                "赤×マーク＝測定面での越境点。"
             )
 
 
