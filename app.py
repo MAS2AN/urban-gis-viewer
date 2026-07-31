@@ -133,8 +133,10 @@ if submitted and address.strip():
         if info.get("errors"):
             st.caption(f"取得エラー（一部データなし）: {', '.join(info['errors'])}")
 
-        # ── 平面図生成ツールへの連携リンク ──────────────────────────────
+        # ── 平面図生成ツールへの連携ボタン ──────────────────────────────
         import re as _re
+        from urllib.parse import quote as _quote
+
         def _extract_num(s):
             m = _re.search(r'(\d+(?:\.\d+)?)', str(s or ""))
             return m.group(1) if m else ""
@@ -145,18 +147,23 @@ if submitted and address.strip():
         _fire_val = info.get("fire", "")
 
         if _zone_val and _far_val and _bcr_val:
+            _FP_BASE = "https://floor-plan-studio-set9dcp8zz2tsdwh5e2fkj.streamlit.app/"
             _fp_url = (
-                f"http://localhost:8503/"
-                f"?zone={_zone_val}"
+                f"{_FP_BASE}"
+                f"?zone={_quote(_zone_val)}"
                 f"&far={_far_val}"
                 f"&bcr={_bcr_val}"
-                f"&fire={_fire_val}"
+                f"&fire={_quote(_fire_val)}"
             )
-            st.success(
-                f"✅ 法規情報を取得しました。"
-                f"[📐 平面図生成ツールで開く]({_fp_url})"
-                f"（※ローカル起動時のみ有効）",
+            st.markdown(
+                f'<a href="{_fp_url}" target="_blank" style="'
+                f'display:block;text-align:center;padding:0.7rem 1.2rem;'
+                f'background:#2F5496;color:white;font-weight:700;font-size:1rem;'
+                f'border-radius:8px;text-decoration:none;margin:0.5rem 0;">'
+                f'📐 この法規情報で平面図を生成する</a>',
+                unsafe_allow_html=True,
             )
+            st.caption(f"用途地域: {_zone_val}　容積率: {_far_val}%　建蔽率: {_bcr_val}%　防火: {_fire_val or 'なし'}")
 
         st.divider()
 
