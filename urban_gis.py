@@ -14,6 +14,8 @@ import math
 import os
 import re
 import sys
+import time
+import uuid
 from pathlib import Path
 
 import folium
@@ -703,6 +705,46 @@ except Exception:
 
 api_key = os.environ.get("REINFOLIB_API_KEY", "")
 
+# ── Google Analytics 4 サーバーサイド（Measurement Protocol）──
+# Streamlit Cloud では JS タグが動かないため、サーバーから直接イベントを送る。
+# session_id と engagement_time_msec を付けないと GA の「ユーザー数」に反映されない。
+def _ga4_event(event_name: str, params: dict | None = None) -> None:
+    """GA4 Measurement Protocol でイベントを送信する。失敗しても無視。"""
+    try:
+        ga_id = st.secrets.get("GA_MEASUREMENT_ID", "")
+        ga_secret = st.secrets.get("GA_API_SECRET", "")
+    except Exception:
+        return
+    if not ga_id or not ga_secret:
+        return
+    if "ga_client_id" not in st.session_state:
+        st.session_state.ga_client_id = str(uuid.uuid4())
+        st.session_state.ga_session_id = str(int(time.time()))
+    try:
+        requests.post(
+            "https://www.google-analytics.com/mp/collect",
+            params={"measurement_id": ga_id, "api_secret": ga_secret},
+            json={
+                "client_id": st.session_state.ga_client_id,
+                "events": [{
+                    "name": event_name,
+                    "params": {
+                        "session_id": st.session_state.ga_session_id,
+                        "engagement_time_msec": 100,
+                        **(params or {}),
+                    },
+                }],
+            },
+            timeout=2,
+        )
+    except Exception:
+        pass
+
+# セッション開始時に1回だけ page_view を送信
+if "ga_page_viewed" not in st.session_state:
+    st.session_state.ga_page_viewed = True
+    _ga4_event("page_view", {"page_title": "都市計画GIS＋敷地法規調査"})
+
 st.markdown("""
 <style>
 [data-testid="stMetric"] {
@@ -830,6 +872,7 @@ with st.form("search_form"):
     submitted = st.form_submit_button("🔍 検索", use_container_width=True, type="primary")
 
 if submitted:
+    _ga4_event("search")
     _use_direct = lat_direct != 0.0 and lon_direct != 0.0
     _has_address = address_input.strip()
 
